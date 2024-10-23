@@ -1,4 +1,4 @@
 flask==3.0.3
 pytest==8.2.0
-requests==2.31.0
+requests==2.32.2
 responses==0.23.1
