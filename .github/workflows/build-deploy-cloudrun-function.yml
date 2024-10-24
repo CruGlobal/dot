@@ -19,3 +19,4 @@ jobs:
     uses: CruGlobal/.github/.github/workflows/build-deploy-cloudrun-function.yml@gcp-cloudrun #temporarily using branch for testing
     with:
       function_name: ${{ github.event.inputs.function_name }}
+
