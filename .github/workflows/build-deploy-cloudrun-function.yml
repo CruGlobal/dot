@@ -19,4 +19,7 @@ jobs:
     uses: CruGlobal/.github/.github/workflows/build-deploy-cloudrun-function.yml@gcp-cloudrun #temporarily using branch for testing
     with:
       function_name: ${{ github.event.inputs.function_name }}
+      workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+      service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+      region: ${{ secrets.GCP_REGION }}
 
