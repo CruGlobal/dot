@@ -1,3 +1,4 @@
+name: projects/289484875682/locations/us-central1/functions/fivetran-trigger
 no-allow-unauthenticated: true
 entry-point: hello_http
 runtime: python312
