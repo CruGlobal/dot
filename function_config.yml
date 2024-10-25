@@ -1,3 +1,4 @@
+no-allow-unauthenticated: true
 entry-point: hello_http
 runtime: python312
 trigger-http: true
