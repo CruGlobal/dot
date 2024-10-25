@@ -1,7 +1,9 @@
---no-allow-unauthenticated
---entry-point=hello_http
---runtime=python312
---trigger-http
---gen2
---source=./fivetran-trigger
---set-secrets=API_KEY=fivetran-trigger_API_KEY:latest,API_SECRET=fivetran-trigger_API_SECRET:latest
+no-allow-unauthenticated: true
+entry-point: hello_http
+runtime: python312
+trigger-http: true
+gen2: true
+source: ./fivetran-trigger
+set-secrets:
+  - API_KEY=fivetran-trigger_API_KEY:latest
+  - API_SECRET=fivetran-trigger_API_SECRET:latest
