@@ -27,4 +27,6 @@ jobs:
       GCP_REGION: ${{ secrets.GCP_REGION }}
     with:
       function_name: ${{ github.event.inputs.function_name }}
+      entry_point: hello_http
+      runtime: python312
 
