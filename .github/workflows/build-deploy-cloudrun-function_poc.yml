@@ -1,0 +1,77 @@
+name: Build & Deploy Cloudrun Function POC
+
+on:
+  push:
+    branches:
+      - poc
+    paths:
+      - 'fivetran-trigger/**'
+  workflow_dispatch:
+    inputs:
+      function_name:
+        description: 'The name of the Cloud Function to deploy'
+        required: true
+        default: 'fivetran-trigger'
+      entry_point:
+        description: 'The python function serving as the entry point'
+        required: true
+        default: 'hello_http'
+      runtime:
+        description: 'The function runtime'
+        required: true
+        default: 'python312'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: poc
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - id: 'auth'
+        name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: '${{ secrets.GCP_SERVICE_ACCOUNT }}@${{ secrets.GCP_PROJECT_ID }}.iam.gserviceaccount.com'
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run Functions
+        id: deploy
+        env:
+          GCP_REGION: ${{ secrets.GCP_REGION }}
+        run: |
+          gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
+          gcloud functions deploy ${{ inputs.function_name }} \
+            --region $GCP_REGION \
+            --source=./${{ inputs.function_name }} \
+            --entry-point=${{ inputs.entry_point }} \
+            --runtime=${{ inputs.runtime }} \
+            --build-service-account=projects/${{ secrets.GCP_PROJECT_ID }}/serviceAccounts/${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }} \
+
+      - uses: actions/github-script@v6
+        if: github.event.pull_request.merged == true
+        with:
+          script: |
+            const output = `#### GCF Deploy ⚙️\`${{ steps.deploy.outcome }}\`
+            <details><summary>Show Deploy</summary>
+            \`\`\`\n
+            ${{ steps.deploy.outputs.stdout }}
+            \`\`\`
+            </details>
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Working Directory: \`${{ inputs.function_name }}\`, Workflow: \`${{ github.workflow }}\`*`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+
