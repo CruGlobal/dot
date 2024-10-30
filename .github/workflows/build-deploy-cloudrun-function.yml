@@ -16,7 +16,7 @@ on:
 jobs:
   build_and_deploy:
 
-    uses: CruGlobal/.github/.github/workflows/build-deploy-cloudrun-function.yml@gcp-cloudrun #temporarily using branch for testing
+    uses: CruGlobal/.github/.github/workflows/build-deploy-cloudrun-function.yml@v1
     with:
       function_name: ${{ github.event.inputs.function_name }}
       entry_point: hello_http
