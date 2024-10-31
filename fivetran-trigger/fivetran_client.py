@@ -36,11 +36,9 @@ class FivetranClient:
     EXIT_CODE_INVALID_INPUT = 206
     EXIT_CODE_UNKNOWN_ERROR = 249
 
-    def __init__(self, api_key: str, api_secret: str) -> None:
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.auth = HTTPBasicAuth(self.api_key, self.api_secret)
-        logger.debug("FivetranClient initialized")
+    def __init__(self, auth: HTTPBasicAuth) -> None:
+        self.auth = auth
+        # logger.debug("FivetranClient initialized")
 
     def _request(
         self, endpoint: str, method: str = "GET", payload: dict = None

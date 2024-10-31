@@ -5,21 +5,53 @@ import logging
 import sys
 from pythonjsonlogger import jsonlogger
 from dotenv import load_dotenv
+import os
+import json
+
+from markupsafe import escape
+from requests import request, auth, Session
 
 logger = logging.getLogger("primary_logger")
+# Create a global HTTP session (which provides connection pooling)
+session = Session()
+basic_auth = None
+
+
+def init():
+    global basic_auth
+    basic_auth = auth.HTTPBasicAuth(env_var("API_KEY"), env_var("API_SECRET"))
+
+
+def env_var(name):
+    return os.environ[name]
+
+
+class CloudLoggingFormatter(logging.Formatter):
+    """
+    Produces messages compatible with google cloud logging
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        s = super().format(record)
+        return json.dumps(
+            {
+                "message": s,
+                "severity": record.levelname,
+                "timestamp": {"seconds": int(record.created), "nanos": 0},
+            }
+        )
 
 
 def setup_logging():
     """
     Sets up logging for the application.
     """
-    json_formatter = jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(message)s")
-    stdout_handler = logging.StreamHandler(stream=sys.stdout)
-    stdout_handler.setLevel(logging.INFO)
-    stdout_handler.setFormatter(json_formatter)
+    handler = logging.StreamHandler(stream=sys.stdout)
+    formatter = CloudLoggingFormatter(fmt="[%(name)s] %(message)s")
+    handler.setFormatter(formatter)
     logger = logging.getLogger("primary_logger")
-    logger.addHandler(stdout_handler)
-    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
     sys.excepthook = handle_unhandled_exception
 
 
@@ -54,19 +86,31 @@ def trigger_sync(request):
     Triggers a Fivetran sync for a given connector ID.
 
     """
-    load_dotenv(".env")
     setup_logging()
+    init()
 
-    logger = logging.getLogger("primary_logger")
-    api_key = os.environ.get("FIVETRAN_API_KEY")
-    api_secret = os.environ.get("FIVETRAN_API_SECRET")
-    connector_id = os.environ.get("CONNECTOR_ID")
+    # Try get_json first
+    request_json = request.get_json(silent=True)
 
-    if not connector_id:
-        logger.error("Error: CONNECTOR_ID environment variable is not set")
-        return "CONNECTOR_ID environment variable is not set", 400
+    # If that fails and we have octet-stream content type, try manual parsing
+    if (
+        request_json is None
+        and request.headers.get("Content-Type") == "application/octet-stream"
+    ):
+        try:
+            request_data = request.get_data(as_text=True)
+            request_json = json.loads(request_data) if request_data else None
+        except Exception as e:
+            logger.error(f"Failed to parse octet-stream data: {str(e)}")
+            request_json = None
 
-    client = FivetranClient(api_key, api_secret)
+    if request_json and "connector_id" in request_json:
+        connector_id = request_json["connector_id"]
+    else:
+        logger.error("Error: Failed to retrieve connector_id")
+        return "Failed to retrieve connector_id", 400
+
+    client = FivetranClient(basic_auth)
 
     try:
         client.trigger_sync(
