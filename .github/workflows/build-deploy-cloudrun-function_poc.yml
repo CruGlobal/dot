@@ -14,7 +14,7 @@ jobs:
     uses: CruGlobal/.github/.github/workflows/build-deploy-cloudrun-function.yml@v1
     with:
       function_name: fivetran-trigger
-      entry_point: hello_http
+      entry_point: trigger_sync
       runtime: python312
       environment: poc
     secrets:
