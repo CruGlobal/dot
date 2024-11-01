@@ -3,8 +3,6 @@ import functions_framework
 from fivetran_client import FivetranClient
 import logging
 import sys
-from pythonjsonlogger import jsonlogger
-from dotenv import load_dotenv
 import os
 import json
 
