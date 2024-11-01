@@ -1,11 +1,17 @@
+import os
 import functions_framework
-
+from fivetran_client import FivetranClient
+import logging
+import sys
+from pythonjsonlogger import jsonlogger
+from dotenv import load_dotenv
 import os
 import json
 
 from markupsafe import escape
 from requests import request, auth, Session
 
+logger = logging.getLogger("primary_logger")
 # Create a global HTTP session (which provides connection pooling)
 session = Session()
 basic_auth = None
@@ -19,48 +25,105 @@ def init():
 def env_var(name):
     return os.environ[name]
 
-@functions_framework.http
-def hello_http(request):
-    """HTTP Cloud Function.
-    Args:
-        request (flask.Request): The request object.
-        <https://flask.palletsprojects.com/en/1.1.x/api/#incoming-request-data>
-    Returns:
-        The response text, or any set of values that can be turned into a
-        Response object using `make_response`
-        <https://flask.palletsprojects.com/en/1.1.x/api/#flask.make_response>.
+
+class CloudLoggingFormatter(logging.Formatter):
     """
-    request_json = request.get_json(silent=True)
-    request_args = request.args
+    Produces messages compatible with google cloud logging
+    """
 
-    if request_json and "name" in request_json:
-        name = request_json["name"]
-    elif request_args and "name" in request_args:
-        name = request_args["name"]
-    else:
-        name = "World"
-    message = f"Hello {escape(name)}!"
-    endpoint = "anything"
-    url = f"https://httpbin.org/{endpoint}"
-    payload = {"message": message}
-    resp = session.request(
-        "POST",
-        url,
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json;version=2",
-        },
-        json=payload,
-        auth=basic_auth,
+    def format(self, record: logging.LogRecord) -> str:
+        s = super().format(record)
+        return json.dumps(
+            {
+                "message": s,
+                "severity": record.levelname,
+                "timestamp": {"seconds": int(record.created), "nanos": 0},
+            }
+        )
+
+
+def setup_logging():
+    """
+    Sets up logging for the application.
+    """
+    handler = logging.StreamHandler(stream=sys.stdout)
+    formatter = CloudLoggingFormatter(fmt="[%(name)s] %(message)s")
+    handler.setFormatter(formatter)
+    logger = logging.getLogger("primary_logger")
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    sys.excepthook = handle_unhandled_exception
+
+
+def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
+    """
+    Handles unhandled exceptions by logging the exception details and sending an alert to the development team.
+
+    This function is intended to be used as a custom excepthook function, which is called when an unhandled exception
+    occurs in the application. The function logs the exception details to the primary logger, and sends an alert to
+    the development team using a third-party service such as Datadog or PagerDuty.
+
+    Args:
+        exc_type (type): The type of the exception that was raised.
+        exc_value (Exception): The exception object that was raised.
+        exc_traceback (traceback): The traceback object that was generated when the exception was raised.
+    """
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    # Log the unhandled exception
+    logger = logging.getLogger("primary_logger")
+    logger.exception(
+        "Unhandled exception", exc_info=(exc_type, exc_value, exc_traceback)
     )
+    # Send an alert to the development team using a third-party service such as Datadog or PagerDuty
+    # TODO: Add code to send an alert to the development team
 
-    if resp.ok:
-        data = resp.json().get("data")
-        returned_message = json.loads(data)["message"]
-        return returned_message
+
+@functions_framework.http
+def trigger_sync(request):
+    """
+    Triggers a Fivetran sync for a given connector ID.
+
+    """
+    setup_logging()
+    init()
+
+    # Try get_json first
+    request_json = request.get_json(silent=True)
+
+    # If that fails and we have octet-stream content type, try manual parsing
+    if (
+        request_json is None
+        and request.headers.get("Content-Type") == "application/octet-stream"
+    ):
+        try:
+            request_data = request.get_data(as_text=True)
+            request_json = json.loads(request_data) if request_data else None
+        except Exception as e:
+            logger.error(f"Failed to parse octet-stream data: {str(e)}")
+            request_json = None
+
+    if request_json and "connector_id" in request_json:
+        connector_id = request_json["connector_id"]
     else:
-        print(f"Bad response: {resp}")
-        return "that didn't work"
+        logger.error("Error: Failed to retrieve connector_id")
+        return "Failed to retrieve connector_id", 400
 
+    client = FivetranClient(basic_auth)
 
-init()
+    try:
+        client.trigger_sync(
+            connector_id=connector_id,
+            force=True,
+            wait_for_completion=False,
+        )
+        logger.info(
+            f"Fivetran sync triggered and completed successfully, connector_id: {connector_id}"
+        )
+        return "Fivetran sync triggered successfully", 200
+    except Exception as e:
+        logger.error(
+            f"connector_id: {connector_id} - Error triggering Fivetran sync: {str(e)}"
+        )
+        return f"Error triggering Fivetran sync: {str(e)}", 500
