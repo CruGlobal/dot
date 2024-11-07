@@ -5,11 +5,11 @@ import logging
 import sys
 import os
 import json
-
-from markupsafe import escape
-from requests import request, auth, Session
+from requests import auth, Session
 
 logger = logging.getLogger("primary_logger")
+logger.propagate = False
+
 # Create a global HTTP session (which provides connection pooling)
 session = Session()
 basic_auth = None
@@ -44,12 +44,19 @@ def setup_logging():
     """
     Sets up logging for the application.
     """
+    global logger
+
+    # Remove any existing handlers
+    if logger.handlers:
+        for handler in logger.handlers:
+            logger.removeHandler(handler)
+
     handler = logging.StreamHandler(stream=sys.stdout)
-    formatter = CloudLoggingFormatter(fmt="[%(name)s] %(message)s")
+    formatter = CloudLoggingFormatter(fmt="%(message)s")
     handler.setFormatter(formatter)
-    logger = logging.getLogger("primary_logger")
     logger.addHandler(handler)
     logger.setLevel(logging.DEBUG)
+
     sys.excepthook = handle_unhandled_exception
 
 
@@ -69,13 +76,10 @@ def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
-    # Log the unhandled exception
-    logger = logging.getLogger("primary_logger")
+
     logger.exception(
         "Unhandled exception", exc_info=(exc_type, exc_value, exc_traceback)
     )
-    # Send an alert to the development team using a third-party service such as Datadog or PagerDuty
-    # TODO: Add code to send an alert to the development team
 
 
 @functions_framework.http
@@ -87,10 +91,8 @@ def trigger_sync(request):
     setup_logging()
     init()
 
-    # Try get_json first
     request_json = request.get_json(silent=True)
 
-    # If that fails and we have octet-stream content type, try manual parsing
     if (
         request_json is None
         and request.headers.get("Content-Type") == "application/octet-stream"
@@ -99,18 +101,20 @@ def trigger_sync(request):
             request_data = request.get_data(as_text=True)
             request_json = json.loads(request_data) if request_data else None
         except Exception as e:
-            logger.error(f"Failed to parse octet-stream data: {str(e)}")
+            logger.exception(f"Failed to parse octet-stream data: {str(e)}")
             request_json = None
 
     if request_json and "connector_id" in request_json:
         connector_id = request_json["connector_id"]
     else:
-        logger.error("Error: Failed to retrieve connector_id")
-        return "Failed to retrieve connector_id", 400
+        logger.exception("Failed to retrieve connector_id")
+        raise ValueError("Failed to retrieve connector_id")
 
     client = FivetranClient(basic_auth)
 
     try:
+        client.update_connector(connector_id=connector_id, schedule_type="manual")
+        logger.info(f"Connector updated successfully, schedule_type: manual")
         client.trigger_sync(
             connector_id=connector_id,
             force=True,
@@ -121,7 +125,7 @@ def trigger_sync(request):
         )
         return "Fivetran sync triggered successfully", 200
     except Exception as e:
-        logger.error(
+        logger.exception(
             f"connector_id: {connector_id} - Error triggering Fivetran sync: {str(e)}"
         )
-        return f"Error triggering Fivetran sync: {str(e)}", 500
+        raise RuntimeError(f"Error triggering Fivetran sync: {str(e)}")

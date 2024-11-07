@@ -1,13 +1,12 @@
-import os
 import flask
 import pytest
 import responses
 from unittest import mock
 import main
 import logging
+from fivetran_client import ExitCodeException
 
 
-# Create a fake "app" for generating test request contexts.
 @pytest.fixture(scope="module")
 def app():
     return flask.Flask(__name__)
@@ -15,79 +14,80 @@ def app():
 
 @pytest.fixture
 def mock_env_vars(monkeypatch):
-    monkeypatch.setenv("FIVETRAN_API_KEY", "test_api_key")
-    monkeypatch.setenv("FIVETRAN_API_SECRET", "test_api_secret")
-    monkeypatch.setenv("CONNECTOR_ID", "test_connector_id")
+    monkeypatch.setenv("API_KEY", "test_api_key")
+    monkeypatch.setenv("API_SECRET", "test_api_secret")
 
 
 @pytest.fixture
-def mock_request():
-    return mock.Mock()
+def mock_request_with_connector():
+    mock_req = mock.Mock()
+    mock_req.get_json.return_value = {"connector_id": "test_connector_id"}
+    return mock_req
+
+
+@pytest.fixture
+def mock_request_without_connector():
+    mock_req = mock.Mock()
+    mock_req.get_json.return_value = {}
+    return mock_req
 
 
 @responses.activate
-def test_trigger_sync_success(mock_env_vars, mock_request, mocker, caplog):
+def test_trigger_sync_success(mock_env_vars, mock_request_with_connector, caplog):
     """
     Tests the trigger_sync function when the sync is triggered successfully.
     """
+    # Mock successful connector update
     responses.add(
-        responses.POST,
-        "https://api.fivetran.com/v1/connectors/test_connector_id/force",
-        json={},
+        responses.PATCH,
+        "https://api.fivetran.com/v1/connectors/test_connector_id",
+        json={"data": {}},
         status=200,
     )
 
-    mock_client = mocker.patch("main.FivetranClient")
-    mock_client.return_value.trigger_sync.return_value = None
-
-    with caplog.at_level(logging.INFO):
-        response = main.trigger_sync(mock_request)
-
-    mock_client.return_value.trigger_sync.assert_called_once_with(
-        connector_id="test_connector_id", force=True, wait_for_completion=False
-    )
-
-    assert (
-        "Fivetran sync triggered and completed successfully, connector_id: test_connector_id"
-        in caplog.text
-    )
-    assert response == ("Fivetran sync triggered successfully", 200)
-
-
-@responses.activate
-def test_trigger_sync_exception(mock_env_vars, mock_request, mocker, caplog):
-    """
-    Tests the trigger_sync function when an exception is raised.
-    """
+    # Mock successful sync trigger
     responses.add(
         responses.POST,
         "https://api.fivetran.com/v1/connectors/test_connector_id/force",
-        json={},
-        status=500,
+        json={"data": {}},
+        status=200,
     )
 
-    mock_client = mocker.patch("main.FivetranClient")
-    mock_client.return_value.trigger_sync.side_effect = Exception("Test exception")
+    with caplog.at_level(logging.INFO):
+        response = main.trigger_sync(mock_request_with_connector)
 
-    with caplog.at_level(logging.ERROR):
-        response = main.trigger_sync(mock_request)
-
-    assert (
-        "connector_id: test_connector_id - Error triggering Fivetran sync: Test exception"
-        in caplog.text
-    )
-    assert response == ("Error triggering Fivetran sync: Test exception", 500)
+    assert response[0] == "Fivetran sync triggered successfully"
+    assert response[1] == 200
+    assert "Fivetran sync triggered and completed successfully" in caplog.text
 
 
 @responses.activate
-def test_trigger_sync_missing_connector_id(mock_request, mocker, caplog):
+def test_trigger_sync_missing_connector_id(mock_env_vars, mock_request_without_connector, caplog):
     """
-    Tests the trigger_sync function when the CONNECTOR_ID environment variable is not set.
+    Tests the trigger_sync function when connector_id is missing from request.
     """
-    mocker.patch.dict(os.environ, {"CONNECTOR_ID": ""})
+    with pytest.raises(ValueError) as exc_info:
+        main.trigger_sync(mock_request_without_connector)
+    
+    assert str(exc_info.value) == "Failed to retrieve connector_id"
+    assert "Failed to retrieve connector_id" in caplog.text
 
-    with caplog.at_level(logging.ERROR):
-        response = main.trigger_sync(mock_request)
 
-    assert "Error: CONNECTOR_ID environment variable is not set" in caplog.text
-    assert response == ("CONNECTOR_ID environment variable is not set", 400)
+@responses.activate
+def test_trigger_sync_invalid_credentials(mock_env_vars, mock_request_with_connector, caplog):
+    """
+    Tests the trigger_sync function with invalid API credentials.
+    """
+    responses.add(
+        responses.PATCH,
+        "https://api.fivetran.com/v1/connectors/test_connector_id",
+        json={"message": "Invalid API key"},
+        status=401,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        main.trigger_sync(mock_request_with_connector)
+
+    assert "Error triggering Fivetran sync" in str(exc_info.value)
+    assert "Authentication failed" in caplog.text
+

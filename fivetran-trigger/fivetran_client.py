@@ -75,7 +75,7 @@ class FivetranClient:
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error: {e.response.status_code} - {e.response.text}")
+            logger.exception(f"Error: {e.response.status_code} - {e.response.text}")
             if e.response.status_code == 401:
                 raise ExitCodeException(
                     f"Authentication failed: {e.response.json().get('message')}",
@@ -134,10 +134,10 @@ class FivetranClient:
                 payload={"force": force},
             )
         except ExitCodeException as e:
-            logger.error(f"Error triggering sync: {e}")
+            logger.exception(f"Error triggering sync: {e}")
             raise ExitCodeException(f"Error triggering sync: {e}", e.exit_code) from e
         else:
-            logger.info("Sync triggered successfully")
+            # logger.info("Sync triggered successfully")
             if wait_for_completion:
                 new_success, new_failure = prev_success, prev_failure
                 while prev_success == new_success and prev_failure == new_failure:
@@ -152,7 +152,7 @@ class FivetranClient:
                 if (prev_failure and new_failure != prev_failure) or (
                     not prev_failure and new_failure
                 ):
-                    logger.error(f"Sync failed at {new_failure}")
+                    logger.exception(f"Sync failed at {new_failure}")
                     raise ExitCodeException(
                         f"Sync failed at {new_failure}",
                         self.EXIT_CODE_SYNC_REFRESH_ERROR,
@@ -180,7 +180,7 @@ class FivetranClient:
             )
             return response.get("data", {}).get("status", {}).get("sync_state")
         except ExitCodeException as e:
-            logger.error(f"Error determining sync status: {e}")
+            logger.exception(f"Error determining sync status: {e}")
             raise ExitCodeException(
                 f"Error determining sync status: {e}", e.exit_code
             ) from e
@@ -205,7 +205,7 @@ class FivetranClient:
             )
             return response.get("data", {})
         except ExitCodeException as e:
-            logger.error(f"Error getting connector details: {e}")
+            logger.exception(f"Error getting connector details: {e}")
             raise ExitCodeException(
                 f"Error getting connector details: {e}", e.exit_code
             ) from e
@@ -260,14 +260,14 @@ class FivetranClient:
             try:
                 self._request(endpoint, method="PATCH", payload=payload)
             except ExitCodeException as e:
-                logger.error(f"Error updating connector: {e}")
+                logger.exception(f"Error updating connector: {e}")
                 raise ExitCodeException(
                     f"Error updating connector: {e}", e.exit_code
                 ) from e
-            else:
-                logger.info("Connector updated successfully")
+            # else:
+            #     logger.info("Connector updated successfully")
         else:
-            logger.error("No updates to connector were provided")
+            logger.exception("No updates to connector were provided")
             raise ExitCodeException(
                 "No updates to connector were provided", self.EXIT_CODE_BAD_REQUEST
             )
@@ -285,5 +285,5 @@ class FivetranClient:
             logger.info("Connection Validated")
             return 0
         except Exception as e:
-            logger.error(f"Error connecting to Fivetran: {e}")
+            logger.exception(f"Error connecting to Fivetran: {e}")
             return 1
