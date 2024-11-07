@@ -7,7 +7,7 @@ module "fivetran-triggers" {
   time_zone   = "UTC"
   schedule = {
     el_fivetran_logs : {
-      cron : "0 */4 * * *",
+      cron : "0 0 1 1 *",
       argument = {
         connector_id = "pedestal_decision"
       }
