@@ -1,27 +1,16 @@
 import os
 import functions_framework
-from fivetran_client import FivetranClient
+from dbt_client import DbtClient
 import logging
 import sys
 import os
 import json
 from requests import auth, Session
+import time
+
 
 logger = logging.getLogger("primary_logger")
 logger.propagate = False
-
-# Create a global HTTP session (which provides connection pooling)
-session = Session()
-basic_auth = None
-
-
-def init():
-    global basic_auth
-    basic_auth = auth.HTTPBasicAuth(env_var("API_KEY"), env_var("API_SECRET"))
-
-
-def env_var(name):
-    return os.environ[name]
 
 
 class CloudLoggingFormatter(logging.Formatter):
@@ -83,13 +72,12 @@ def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
 
 
 @functions_framework.http
-def trigger_sync(request):
+def trigger_dbt_job(request):
     """
-    Triggers a Fivetran sync for a given connector ID.
+    Triggers a dbt job for a given job id.
 
     """
     setup_logging()
-    init()
 
     request_json = request.get_json(silent=True)
 
@@ -104,30 +92,25 @@ def trigger_sync(request):
             logger.exception(f"Failed to parse octet-stream data: {str(e)}")
             request_json = None
 
-    if request_json and "connector_id" in request_json:
-        connector_id = request_json["connector_id"]
+    if request_json and "job_id" in request_json:
+        job_id = request_json["job_id"]
     else:
-        logger.exception("Failed to retrieve connector_id")
+        logger.exception("Failed to retrieve job_id")
         raise
 
-    client = FivetranClient(basic_auth)
-
+    dbt_token = os.environ["DBT_TOKEN"]
+    account_id = "10206"
     try:
-        client.update_connector(connector_id=connector_id, schedule_type="manual")
-        logger.info(
-            f"Connector updated successfully, schedule_type: manual, connector_id: {connector_id}"
-        )
-        client.trigger_sync(
-            connector_id=connector_id,
-            force=True,
-            wait_for_completion=False,
-        )
-        logger.info(
-            f"Fivetran sync triggered and completed successfully, connector_id: {connector_id}"
-        )
-        return "Fivetran sync triggered successfully", 200
+        client = DbtClient(access_token=dbt_token, account_id=account_id)
+        job_run_response = client.trigger_job(job_id)
+        run_id = job_run_response["data"]["id"]
+        if run_id is None:
+            logger.exception(f"dbt run failed to start.")
+            return
+        logger.info(f"DBT run {run_id} started successfully.")
+        return "Trigger dbt job completed", 200
     except Exception as e:
         logger.exception(
-            f"connector_id: {connector_id} - Error triggering Fivetran sync: {str(e)}"
+            f"An error occurred when attempting to trigger dbt job: {str(e)}"
         )
         raise
