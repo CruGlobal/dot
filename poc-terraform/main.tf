@@ -1,5 +1,5 @@
 module "fivetran_trigger" {
-  source = "git@github.com:CruGlobal/cru-terraform-modules.git//gcp/cloudrun-function/scheduled-tasks?ref=v30.14.4"
+  source = "git::https://github.com/CruGlobal/cru-terraform-modules.git//gcp/cloudrun-function/scheduled-tasks?ref=v30.14.4"
 
   name        = "fivetran-trigger"
   description = "A set of triggers to kick off Fivetran connection syncs for various systems"
@@ -110,41 +110,41 @@ module "fivetran_trigger" {
       argument = {
         "connector_id" = "unclothed_cheddar"
       }
-    },
+    }
   }
 
   secrets = ["API_KEY", "API_SECRET"]
 
   secret_managers = [
+    "user:luis.rodriguez@cru.org",
+    "user:matt.drees@cru.org",
     "group:dps-gcp-role-data-engineers@cru.org",
   ]
-
-  project_id = module.project.project_id
-  region     = local.region
+  project_id = local.project_id
 }
 
 module "dbt-triggers" {
-  source      = "git::https://github.com/CruGlobal/cru-terraform-modules.git//gcp/cloudrun-function/scheduled-tasks?ref=v30.13.0"
+  source      = "git::https://github.com/CruGlobal/cru-terraform-modules.git//gcp/cloudrun-function/scheduled-tasks?ref=v30.14.4"
   name        = "dbt-trigger"
   description = "A set of triggers to kick off dbt jobs"
-  secrets     = ["DBT_TOKEN"]
   time_zone   = "UTC"
   schedule = {
     doc_src_freshness : {
       cron : "0 0 1 1 *",
       argument = {
-        job_id              = "18120"
-        wait_for_completion = true
+        "job_id" = "18120"
       }
     },
     utilities : {
       cron : "0 0 1 1 *",
       argument = {
-        job_id              = "23366"
-        wait_for_completion = false
+        "job_id" = "23366"
       }
     }
   }
+
+  secrets = ["DBT_TOKEN"]
+
   secret_managers = [
     "user:luis.rodriguez@cru.org",
     "user:matt.drees@cru.org",

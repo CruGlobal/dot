@@ -94,9 +94,6 @@ def trigger_dbt_job(request):
 
     if request_json and "job_id" in request_json:
         job_id = request_json["job_id"]
-        if "wait_for_completion" in request_json:
-            wait_for_completion_val = request_json["wait_for_completion"]
-            wait_for_completion = wait_for_completion_val.lower() == "true"
     else:
         logger.exception("Failed to retrieve job_id")
         raise
@@ -111,46 +108,6 @@ def trigger_dbt_job(request):
             logger.exception(f"dbt run failed to start.")
             return
         logger.info(f"DBT run {run_id} started successfully.")
-        if wait_for_completion:
-            logger.info(f"Checking run details for run {run_id}.")
-            is_complete = False
-            exit_code = 110
-            while not is_complete:
-                run_details = client.get_run_details(run_id)
-                is_complete = run_details["data"]["is_complete"]
-                if not is_complete:
-                    logger.info(
-                        f"The run {run_id} is not yet completed. Waiting for 30 seconds..."
-                    )
-                    time.sleep(30)
-                else:
-                    exit_code = client.determine_run_status(run_id)
-                    if exit_code != 10:
-                        failed_steps = [
-                            step
-                            for step in run_details["data"]["run_steps"]
-                            if step["status"] != 10
-                        ]
-
-                        error_details = {
-                            "run_id": run_details["data"]["id"],
-                            "status": run_details["data"]["status"],
-                            "status_message": run_details["data"]["status_message"],
-                            "failed_steps": [
-                                {"step_name": step["name"]} for step in failed_steps
-                            ],
-                        }
-
-                        error_message = (
-                            f"DBT Run Failure Summary:\n"
-                            f"Run ID: {error_details['run_id']}\n"
-                            f"Status: {error_details['status']}\n"
-                            f"Message: {error_details['status_message']}\n"
-                            f"Failed Steps: {', '.join(step['step_name'] for step in error_details['failed_steps'])}"
-                        )
-
-                        # logger.exception(error_message)
-                        raise RuntimeError(error_message)
         return "Trigger dbt job completed", 200
     except Exception as e:
         logger.exception(
