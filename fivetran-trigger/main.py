@@ -108,15 +108,13 @@ def trigger_sync(request):
         connector_id = request_json["connector_id"]
     else:
         logger.exception("Failed to retrieve connector_id")
-        raise
+        raise ValueError("Failed to retrieve connector_id")
 
     client = FivetranClient(basic_auth)
 
     try:
         client.update_connector(connector_id=connector_id, schedule_type="manual")
-        logger.info(
-            f"Connector updated successfully, schedule_type: manual, connector_id: {connector_id}"
-        )
+        logger.info(f"Connector updated successfully, schedule_type: manual")
         client.trigger_sync(
             connector_id=connector_id,
             force=True,
@@ -130,4 +128,4 @@ def trigger_sync(request):
         logger.exception(
             f"connector_id: {connector_id} - Error triggering Fivetran sync: {str(e)}"
         )
-        raise
+        raise RuntimeError(f"Error triggering Fivetran sync: {str(e)}")

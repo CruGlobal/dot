@@ -6,6 +6,17 @@ from requests.auth import HTTPBasicAuth
 logger = logging.getLogger("primary_logger")
 
 
+class ExitCodeException(Exception):
+    """
+    ExitCodeException is a custom exception class for raising exceptions with exit codes.
+    """
+
+    def __init__(self, message, exit_code):
+        super().__init__(message)
+        self.message = message
+        self.exit_code = exit_code
+
+
 class FivetranClient:
     """
     FivetranClient is a class for interacting with the Fivetran API.
@@ -16,8 +27,18 @@ class FivetranClient:
         auth (HTTPBasicAuth): The authentication object used for requests
     """
 
+    EXIT_CODE_INVALID_CREDENTIALS = 200
+    EXIT_CODE_BAD_REQUEST = 201
+    EXIT_CODE_SYNC_REFRESH_ERROR = 202
+    EXIT_CODE_SYNC_ALREADY_RUNNING = 203
+    EXIT_CODE_SYNC_INVALID_SOURCE_ID = 204
+    EXIT_CODE_SYNC_INVALID_POKE_INTERVAL = 205
+    EXIT_CODE_INVALID_INPUT = 206
+    EXIT_CODE_UNKNOWN_ERROR = 249
+
     def __init__(self, auth: HTTPBasicAuth) -> None:
         self.auth = auth
+        # logger.debug("FivetranClient initialized")
 
     def _request(
         self, endpoint: str, method: str = "GET", payload: dict = None
@@ -55,7 +76,25 @@ class FivetranClient:
             return resp.json()
         except requests.exceptions.RequestException as e:
             logger.exception(f"Error: {e.response.status_code} - {e.response.text}")
-            raise
+            if e.response.status_code == 401:
+                raise ExitCodeException(
+                    f"Authentication failed: {e.response.json().get('message')}",
+                    self.EXIT_CODE_INVALID_CREDENTIALS,
+                )
+            elif e.response.json().get("code") == "NotFound_Integration":
+                raise ExitCodeException(
+                    f"Invalid source ID: {e.response.json().get('message')}",
+                    self.EXIT_CODE_SYNC_INVALID_SOURCE_ID,
+                )
+            elif e.response.status_code == 400:
+                raise ExitCodeException(
+                    f"Bad request: {e.response.json().get('message')}",
+                    self.EXIT_CODE_BAD_REQUEST,
+                )
+            else:
+                raise ExitCodeException(
+                    f"Unknown error: {e.response.json()}", self.EXIT_CODE_UNKNOWN_ERROR
+                )
 
     def trigger_sync(
         self,
@@ -94,10 +133,11 @@ class FivetranClient:
                 method="POST",
                 payload={"force": force},
             )
-        except Exception as e:
+        except ExitCodeException as e:
             logger.exception(f"Error triggering sync: {e}")
-            raise
+            raise ExitCodeException(f"Error triggering sync: {e}", e.exit_code) from e
         else:
+            # logger.info("Sync triggered successfully")
             if wait_for_completion:
                 new_success, new_failure = prev_success, prev_failure
                 while prev_success == new_success and prev_failure == new_failure:
@@ -113,7 +153,10 @@ class FivetranClient:
                     not prev_failure and new_failure
                 ):
                     logger.exception(f"Sync failed at {new_failure}")
-                    raise
+                    raise ExitCodeException(
+                        f"Sync failed at {new_failure}",
+                        self.EXIT_CODE_SYNC_REFRESH_ERROR,
+                    )
                 else:
                     logger.info("No new failure detected")
 
@@ -136,9 +179,11 @@ class FivetranClient:
                 endpoint=f"connectors/{connector_id}", method="GET"
             )
             return response.get("data", {}).get("status", {}).get("sync_state")
-        except Exception as e:
+        except ExitCodeException as e:
             logger.exception(f"Error determining sync status: {e}")
-            raise
+            raise ExitCodeException(
+                f"Error determining sync status: {e}", e.exit_code
+            ) from e
 
     def get_connector_details(self, connector_id: str) -> dict:
         """
@@ -159,9 +204,11 @@ class FivetranClient:
                 endpoint=f"connectors/{connector_id}", method="GET"
             )
             return response.get("data", {})
-        except Exception as e:
+        except ExitCodeException as e:
             logger.exception(f"Error getting connector details: {e}")
-            raise
+            raise ExitCodeException(
+                f"Error getting connector details: {e}", e.exit_code
+            ) from e
 
     def _get_latest_success_and_failure(self, connector_id: str) -> tuple:
         """
@@ -212,12 +259,18 @@ class FivetranClient:
             endpoint = f"connectors/{connector_id}"
             try:
                 self._request(endpoint, method="PATCH", payload=payload)
-            except Exception as e:
+            except ExitCodeException as e:
                 logger.exception(f"Error updating connector: {e}")
-                raise
+                raise ExitCodeException(
+                    f"Error updating connector: {e}", e.exit_code
+                ) from e
+            # else:
+            #     logger.info("Connector updated successfully")
         else:
             logger.exception("No updates to connector were provided")
-            raise
+            raise ExitCodeException(
+                "No updates to connector were provided", self.EXIT_CODE_BAD_REQUEST
+            )
 
     def connect(self) -> int:
         """
