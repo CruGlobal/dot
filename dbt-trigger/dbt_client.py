@@ -11,8 +11,8 @@ class DbtClient:
         self.access_token = access_token
         self.account_id = account_id
         self.headers = {"Authorization": f"Bearer {access_token}"}
-        self.account_url = f"https://cloud.getdbt.com/api/v2/accounts/{account_id}/"
-        self.base_url = "https://cloud.getdbt.com/api/v2/"
+        self.account_url = f"https://cloud.getdbt.com/api/v2/accounts/{account_id}"
+        self.base_url = "https://cloud.getdbt.com/api/v2"
 
     def _request(self, url, data=None, params=None, method="GET"):
         request_details = {"headers": self.headers}
