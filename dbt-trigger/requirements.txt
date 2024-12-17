@@ -1,0 +1,5 @@
+# For basic Cloud Run Functions infrastructure
+functions-framework==3.*
+
+# For fivetran api calls
+requests==2.32.3
