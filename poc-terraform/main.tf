@@ -43,17 +43,6 @@ module "dbt-triggers" {
   secret_managers = [
     "user:luis.rodriguez@cru.org",
     "user:matt.drees@cru.org",
-
-    
-          
-            
-    
-
-          
-          Expand Down
-    
-    
-  
     "group:dps-gcp-role-data-engineers@cru.org",
   ]
   project_id = local.project_id
