@@ -3,7 +3,6 @@ import requests
 import re
 import logging
 from datetime import datetime
-import os
 import sys
 import functions_framework
 import json
@@ -13,12 +12,10 @@ import pandas as pd
 import zipfile
 from datetime import date
 import io
+from typing import Tuple, List, Dict, Any
 
 logger = logging.getLogger("primary_logger")
 logger.propagate = False
-
-# session = requests.Session()
-# basic_auth = None
 
 service_account_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
 service_account = open(service_account_path, "r").read()
@@ -92,27 +89,27 @@ def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
     # TODO: Add code to send an alert to the development team
 
 
-def load_to_dataframe(
-    url: str,
-    schema: list,
-    sep: str = "\t",
-    skip_header_rows: int = 1,
-    header: int = None,
-    file_name_regex: str = None,
-) -> pd.DataFrame:
-
+def get_authentication(url: str) -> Tuple[Dict[str, str], Any]:
+    """Handle authentication for different domains."""
     url_domain = urlparse(url).netloc
+    auth = None
 
     if "geonames" in url_domain:
-        username = env_var("GEONAMES_USERNAME")
-        password = env_var("GEONAMES_PASSWORD")
-        auth = (username, password)
+        geonames_username = env_var("GEONAMES_USERNAME")
+        geonames_password = env_var("GEONAMES_PASSWORD")
+        auth = (geonames_username, geonames_password)
+        return url, auth
     elif "maxmind" in url_domain:
-        license_key = env_var("MAXMIND_LICENSE_KEY")
-        url = url + f"&license_key={license_key}"
-        auth = None
+        maxmind_license_key = env_var("MAXMIND_LICENSE_KEY")
+        url = url + f"&license_key={maxmind_license_key}"
+        return url, None
 
-    dtype_mapping = {
+    return url, auth
+
+
+def get_dtype_mapping() -> Dict[str, str]:
+    """Return the mapping of schema types to pandas dtypes."""
+    return {
         "string": "string",
         "integer": "Int64",
         "float": "float64",
@@ -120,7 +117,10 @@ def load_to_dataframe(
         "date": "string",
     }
 
-    na_values = [
+
+def get_na_values() -> List[str]:
+    """Return the list of values to be treated as NA. This is to mainly exclude country code 'NA'."""
+    return [
         "",
         " ",
         "#N/A",
@@ -142,78 +142,122 @@ def load_to_dataframe(
         "null ",
     ]
 
-    dtypes = {}
-    for i, (col_name, col_type) in enumerate(schema):
-        dtypes[i] = dtype_mapping[col_type]
 
-    num_columns = len(schema)
+def create_dtype_dict(schema: list, dtype_mapping: Dict[str, str]) -> Dict[int, str]:
+    """Create a dictionary mapping column indices to their data types."""
+    return {i: dtype_mapping[col_type] for i, (_, col_type) in enumerate(schema)}
 
+
+def read_csv_from_bytes(
+    file_bytes: io.BytesIO,
+    sep: str,
+    skip_header_rows: int,
+    header: int,
+    dtypes: Dict[int, str],
+    num_columns: int,
+    na_values: List[str],
+) -> pd.DataFrame:
+    """Read a CSV file from bytes into a pandas DataFrame."""
+    return pd.read_csv(
+        file_bytes,
+        sep=sep,
+        skiprows=skip_header_rows,
+        header=header,
+        on_bad_lines="skip",
+        dtype=dtypes,
+        usecols=range(num_columns),
+        keep_default_na=False,
+        na_values=na_values,
+    )
+
+
+def process_zip_file(
+    zip_ref: zipfile.ZipFile,
+    file_name_regex: str,
+    sep: str,
+    skip_header_rows: int,
+    header: int,
+    dtypes: Dict[int, str],
+    num_columns: int,
+    na_values: List[str],
+) -> pd.DataFrame:
+    """Process a ZIP file and return a DataFrame from the contained CSV."""
+    if len(zip_ref.namelist()) == 1:
+        file_name = zip_ref.namelist()[0]
+    else:
+        matched_files = [
+            file_name
+            for file_name in zip_ref.namelist()
+            if re.match(file_name_regex, file_name)
+        ]
+        if not matched_files:
+            raise ValueError("No regex matching file found in the ZIP archive.")
+        file_name = matched_files[0]
+
+    with zip_ref.open(file_name) as extracted_file:
+        return read_csv_from_bytes(
+            io.BytesIO(extracted_file.read()),
+            sep,
+            skip_header_rows,
+            header,
+            dtypes,
+            num_columns,
+            na_values,
+        )
+
+
+def load_to_dataframe(
+    url: str,
+    schema: list,
+    sep: str = "\t",
+    skip_header_rows: int = 1,
+    header: int = None,
+    file_name_regex: str = None,
+) -> pd.DataFrame:
+    """Main function to load data from URL into a DataFrame."""
     try:
+        url, auth = get_authentication(url)
+
+        dtype_mapping = get_dtype_mapping()
+        na_values = get_na_values()
+        dtypes = create_dtype_dict(schema, dtype_mapping)
+        num_columns = len(schema)
+
         with requests.get(url, auth=auth, stream=True) as r:
             r.raise_for_status()
             file_bytes = io.BytesIO(r.content)
+
+            # Process the file based on type
             if url.endswith(".zip") or "suffix=zip" in url:
                 with zipfile.ZipFile(file_bytes, "r") as zip_ref:
-                    if len(zip_ref.namelist()) == 1:
-                        file_name = zip_ref.namelist()[0]
-                        with zip_ref.open(file_name) as extracted_file:
-                            df_original = pd.read_csv(
-                                extracted_file,
-                                sep=sep,
-                                skiprows=skip_header_rows,
-                                header=header,
-                                on_bad_lines="skip",
-                                dtype=dtypes,
-                                usecols=range(num_columns),
-                                keep_default_na=False,
-                                na_values=na_values,
-                            )
-                    else:
-                        matched_files = [
-                            file_name
-                            for file_name in zip_ref.namelist()
-                            if re.match(file_name_regex, file_name)
-                        ]
-                        if matched_files:
-                            target_file = matched_files[0]
-                            with zip_ref.open(target_file) as extracted_file:
-                                df_original = pd.read_csv(
-                                    extracted_file,
-                                    sep=sep,
-                                    skiprows=skip_header_rows,
-                                    header=header,
-                                    on_bad_lines="skip",
-                                    dtype=dtypes,
-                                    usecols=range(num_columns),
-                                    keep_default_na=False,
-                                    na_values=na_values,
-                                )
-                        else:
-                            logger.error(
-                                "No regex matching file found in the ZIP archive."
-                            )
+                    df_original = process_zip_file(
+                        zip_ref,
+                        file_name_regex,
+                        sep,
+                        skip_header_rows,
+                        header,
+                        dtypes,
+                        num_columns,
+                        na_values,
+                    )
             else:
-                df_original = pd.read_csv(
+                df_original = read_csv_from_bytes(
                     file_bytes,
-                    sep=sep,
-                    skiprows=skip_header_rows,
-                    header=header,
-                    on_bad_lines="skip",
-                    dtype=dtypes,
-                    usecols=range(num_columns),
-                    keep_default_na=False,
-                    na_values=na_values,
+                    sep,
+                    skip_header_rows,
+                    header,
+                    dtypes,
+                    num_columns,
+                    na_values,
                 )
 
         column_names = [col[0] for col in schema]
         df_original.columns = column_names
-
         df = df_original.astype(
             {col_name: dtype_mapping[col_type] for col_name, col_type in schema}
         )
 
-        logger.info(f"Successfully downloaded and read CSV.")
-
+        logger.info("Successfully downloaded and read CSV.")
         return df
 
     except Exception as e:
@@ -691,8 +735,8 @@ def process_geo_time_zones():
 
 
 @functions_framework.http
-def trigger_geography_sync():
-    logger.info("Starting geography sync at " + str(datetime.now()))
+def process_geography_data():
+    logger.info("Start processing geography data")
     setup_logging()
     process_geo_admin_1_codes()
     process_geo_admin_2_codes()
@@ -712,4 +756,4 @@ def trigger_geography_sync():
     process_geo_feature_codes()
     process_geo_iso_language_codes()
     process_geo_time_zones()
-    logger.info("Geography sync completed at " + str(datetime.now()))
+    logger.info("Processing geography data completed")
