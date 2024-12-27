@@ -2,4 +2,4 @@
 functions-framework==3.*
 
 # For fivetran api calls
-requests==2.32.3
+requests==2.32.2
