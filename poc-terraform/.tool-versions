@@ -1,0 +1,4 @@
+terraform 1.9.4
+packer 1.10.3
+terraform-docs 0.18.0
+pre-commit 3.8.0

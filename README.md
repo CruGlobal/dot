@@ -63,3 +63,25 @@ You probably should only be doing this in the POC env.
 ```bash
 gcloud functions deploy fivetran-trigger --source=. --entry-point=hello_http --runtime=python312 --gen2 --region=us-central1
 ```
+
+
+## POC environment infrastructure
+
+The POC environment is contained within the [cru-data-orchestration-poc](https://console.cloud.google.com/welcome?project=cru-data-orchestration-poc) GCP project.
+The project and its integrations with Datadog and Github are managed by Terraform and Atlantis in the [cru-terraform repo](https://github.com/CruGlobal/cru-terraform/tree/master/applications/data-warehouse/dot/poc).
+However, the functions and related infrastructure are not managed that way. Instead, devs can 'spin up' the functions by using terraform locally, using local tf state. They can then use the web console or gcloud cli to experiment and learn.
+
+To spin up the POC infrastructure:
+ * install terraform and gcloud
+ * authenticate with gcloud with ADC: `gcloud auth application-default set-quota-project cru-data-orchestration-poc`
+ * cd into `poc-terraform`
+ * coordinate with team; only one person can do this at time
+ * `terraform init`
+ * `terraform apply`
+ * set up secrets with gcloud (see above)
+ * deploy code (see above, or use GHA)
+
+To clean up when you're done:
+ * `terraform destroy`
+
+Infrastructure learnings here can be applied to the terraform config for the beta and production environments.
