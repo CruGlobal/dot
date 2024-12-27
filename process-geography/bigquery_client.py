@@ -16,9 +16,10 @@ class BigQueryClient:
         conn (bigquery.Client): The BigQuery client object
     """
 
-    def __init__(self) -> None:
-        self.credentials, self.project = google.auth.default()
-        self.conn = bigquery.Client(credentials=self.credentials, project=self.project)
+    def __init__(self, project: str) -> None:
+        self.credentials, _ = google.auth.default()
+        self.project = project
+        self.conn = bigquery.Client(credentials=self.credentials)
 
     @property
     def email(self):
@@ -58,6 +59,7 @@ class BigQueryClient:
             )
             job.result()
             logger.info(f"Dataframe uploaded to BigQuery {dataset}.{table}")
+            del df
         except Exception as e:
             logger.exception(
                 f"An error occurred when attempting to upload to BigQuery: {str(e)}"
