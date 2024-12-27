@@ -2,7 +2,6 @@ import os
 import requests
 import re
 import logging
-from datetime import datetime
 import sys
 import functions_framework
 import json
@@ -13,14 +12,15 @@ import zipfile
 from datetime import date
 import io
 from typing import Tuple, List, Dict, Any
+import resource
+import gc
 
 logger = logging.getLogger("primary_logger")
 logger.propagate = False
 
-service_account_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-service_account = open(service_account_path, "r").read()
-client = BigQueryClient(service_account)
+project_name = "cru-data-warehouse-elt-stage"
 dataset_name = "el_geography"
+client = BigQueryClient(project=project_name)
 
 
 def env_var(name):
@@ -96,11 +96,14 @@ def get_authentication(url: str) -> Tuple[Dict[str, str], Any]:
 
     if "geonames" in url_domain:
         geonames_username = env_var("GEONAMES_USERNAME")
+        geonames_username = geonames_username.strip()
         geonames_password = env_var("GEONAMES_PASSWORD")
+        geonames_password = geonames_password.strip()
         auth = (geonames_username, geonames_password)
         return url, auth
     elif "maxmind" in url_domain:
         maxmind_license_key = env_var("MAXMIND_LICENSE_KEY")
+        maxmind_license_key = maxmind_license_key.strip()
         url = url + f"&license_key={maxmind_license_key}"
         return url, None
 
@@ -263,6 +266,12 @@ def load_to_dataframe(
     except Exception as e:
         logger.exception(f"Error occurred: {e}")
         raise
+
+
+def print_memory_usage(message=""):
+    """Prints the current memory usage."""
+    memory_usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    logger.info(f"{message} Current Memory Usage: {memory_usage/1024:.2f} MB")
 
 
 def process_geo_admin_1_codes():
@@ -562,7 +571,7 @@ def process_geo_geoip_2_city_blocks_ipv6():
         url,
         schema,
         sep=",",
-        file_name_regex="GeoIP2-City-CSV_\d{8}\/GeoIP2-City-Blocks-IPv6.csv",
+        file_name_regex=r"GeoIP2-City-CSV_\d{8}\/GeoIP2-City-Blocks-IPv6.csv",
     )
     client.upload_from_dataframe(
         df,
@@ -597,7 +606,7 @@ def process_geo_geoip_2_city_locations():
         url,
         schema,
         sep=",",
-        file_name_regex="GeoIP2-City-CSV_\d{8}\/GeoIP2-City-Locations-en\.csv",
+        file_name_regex=r"GeoIP2-City-CSV_\d{8}\/GeoIP2-City-Locations-en\.csv",
     )
     schema = [
         ["geoname_id", "integer"],
@@ -634,7 +643,7 @@ def process_geo_geoip_2_country_blocks_ipv6():
         url,
         schema,
         sep=",",
-        file_name_regex="GeoIP2-Country-CSV_\d{8}\/GeoIP2-Country-Blocks-IPv6.csv",
+        file_name_regex=r"GeoIP2-Country-CSV_\d{8}\/GeoIP2-Country-Blocks-IPv6.csv",
     )
     df = df[df["geoname_id"].notnull()]
     client.upload_from_dataframe(
@@ -663,7 +672,7 @@ def process_geo_geoip_2_country_locations():
         url,
         schema,
         sep=",",
-        file_name_regex="GeoIP2-Country-CSV_\d{8}\/GeoIP2-Country-Locations-en\.csv",
+        file_name_regex=r"GeoIP2-Country-CSV_\d{8}\/GeoIP2-Country-Locations-en\.csv",
     )
     client.upload_from_dataframe(
         df,
@@ -735,25 +744,72 @@ def process_geo_time_zones():
 
 
 @functions_framework.http
-def process_geography_data():
-    logger.info("Start processing geography data")
+def process_geography_data(request):
     setup_logging()
-    process_geo_admin_1_codes()
-    process_geo_admin_2_codes()
-    process_geo_admincode_5()
-    process_geo_all_countries()
-    process_geo_all_countries_deleted()
-    process_geo_all_countries_modified()
-    process_geo_alternate_names_deleted()
-    process_geo_alternate_names_modified()
-    process_geo_alternate_names_v_2()
-    process_geo_country_info()
-    process_geo_geoip_2_city_blocks_ipv6()
-    process_geo_geoip_2_city_locations()
-    process_geo_geoip_2_country_blocks_ipv6()
-    process_geo_geoip_2_country_locations()
-    process_geo_hierarchy()
-    process_geo_feature_codes()
-    process_geo_iso_language_codes()
-    process_geo_time_zones()
-    logger.info("Processing geography data completed")
+    try:
+        logger.info("Start processing geography data")
+        print_memory_usage("Before processing:")
+        # process_geo_admin_1_codes()
+        # print_memory_usage("After process_geo_admin_1_codes:")
+
+        process_geo_admin_2_codes()
+        print_memory_usage("After process_geo_admin_2_codes:")
+
+        process_geo_admincode_5()
+        print_memory_usage("After process_geo_admincode_5:")
+
+        process_geo_all_countries()
+        print_memory_usage("After process_geo_all_countries:")
+        gc.collect()
+        print_memory_usage("After gc.collect():")
+
+        process_geo_all_countries_deleted()
+        print_memory_usage("After process_geo_all_countries_deleted:")
+
+        process_geo_all_countries_modified()
+        print_memory_usage("After process_geo_all_countries_modified:")
+
+        process_geo_alternate_names_deleted()
+        print_memory_usage("After process_geo_alternate_names_deleted:")
+
+        process_geo_alternate_names_modified()
+        print_memory_usage("After process_geo_alternate_names_modified:")
+
+        process_geo_alternate_names_v_2()
+        print_memory_usage("After process_geo_alternate_names_v_2:")
+        gc.collect()
+        print_memory_usage("After gc.collect():")
+
+        process_geo_country_info()
+        print_memory_usage("After process_geo_country_info:")
+
+        process_geo_geoip_2_city_blocks_ipv6()
+        print_memory_usage("After process_geo_geoip_2_city_blocks_ipv6:")
+        gc.collect()
+        print_memory_usage("After gc.collect():")
+
+        process_geo_geoip_2_city_locations()
+        print_memory_usage("After process_geo_geoip_2_city_locations:")
+
+        process_geo_geoip_2_country_blocks_ipv6()
+        print_memory_usage("After process_geo_geoip_2_country_blocks_ipv6:")
+
+        process_geo_geoip_2_country_locations()
+        print_memory_usage("After process_geo_geoip_2_country_locations:")
+
+        process_geo_hierarchy()
+        print_memory_usage("After process_geo_hierarchy:")
+
+        process_geo_feature_codes()
+        print_memory_usage("After process_geo_feature_codes:")
+
+        process_geo_iso_language_codes()
+        print_memory_usage("After process_geo_iso_language_codes:")
+
+        process_geo_time_zones()
+        print_memory_usage("After process_geo_time_zones:")
+        logger.info("Processing geography data completed")
+        return "Geography data processing completed", 200
+    except Exception as e:
+        logger.exception(f"Error processing geography data: {str(e)}")
+        raise
