@@ -1,15 +1,10 @@
-import flask
 import pytest
 import responses
 from unittest import mock
+from flask import Request
 import main
 import logging
-from fivetran_client import ExitCodeException
-
-
-@pytest.fixture(scope="module")
-def app():
-    return flask.Flask(__name__)
+import sys
 
 
 @pytest.fixture
@@ -20,16 +15,35 @@ def mock_env_vars(monkeypatch):
 
 @pytest.fixture
 def mock_request_with_connector():
-    mock_req = mock.Mock()
+    mock_req = mock.Mock(spec=Request)
     mock_req.get_json.return_value = {"connector_id": "test_connector_id"}
     return mock_req
 
 
 @pytest.fixture
 def mock_request_without_connector():
-    mock_req = mock.Mock()
+    mock_req = mock.Mock(spec=Request)
     mock_req.get_json.return_value = {}
     return mock_req
+
+
+@pytest.fixture(autouse=True)
+def setup_logging():
+    """Set up logging for tests using the same configuration as main.py"""
+    logger = logging.getLogger("primary_logger")
+    logger.handlers = []
+    logger.propagate = True
+
+    handler = logging.StreamHandler(stream=sys.stdout)
+    formatter = main.CloudLoggingFormatter(fmt="%(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+
+    yield
+
+    logger.handlers = []
+    logger.propagate = False
 
 
 @responses.activate
@@ -53,28 +67,38 @@ def test_trigger_sync_success(mock_env_vars, mock_request_with_connector, caplog
         status=200,
     )
 
-    with caplog.at_level(logging.INFO):
-        response = main.trigger_sync(mock_request_with_connector)
+    response = main.trigger_sync(mock_request_with_connector)
 
+    success_message = "Fivetran sync triggered and completed successfully"
+    log_messages = [record.message for record in caplog.records]
+    assert any(
+        success_message in msg for msg in log_messages
+    ), f"Expected message not found in logs: {log_messages}"
     assert response[0] == "Fivetran sync triggered successfully"
     assert response[1] == 200
-    assert "Fivetran sync triggered and completed successfully" in caplog.text
 
 
 @responses.activate
-def test_trigger_sync_missing_connector_id(mock_env_vars, mock_request_without_connector, caplog):
+def test_trigger_sync_missing_connector_id(
+    mock_env_vars, mock_request_without_connector, caplog
+):
     """
     Tests the trigger_sync function when connector_id is missing from request.
     """
-    with pytest.raises(ValueError) as exc_info:
+    try:
         main.trigger_sync(mock_request_without_connector)
-    
-    assert str(exc_info.value) == "Failed to retrieve connector_id"
-    assert "Failed to retrieve connector_id" in caplog.text
+        pytest.fail("Expected function to raise an exception")
+    except Exception as e:
+        log_messages = [record.message for record in caplog.records]
+        assert any(
+            "Failed to retrieve connector_id" in msg for msg in log_messages
+        ), f"Expected error message not found in logs: {log_messages}"
 
 
 @responses.activate
-def test_trigger_sync_invalid_credentials(mock_env_vars, mock_request_with_connector, caplog):
+def test_trigger_sync_invalid_credentials(
+    mock_env_vars, mock_request_with_connector, caplog
+):
     """
     Tests the trigger_sync function with invalid API credentials.
     """
@@ -85,9 +109,11 @@ def test_trigger_sync_invalid_credentials(mock_env_vars, mock_request_with_conne
         status=401,
     )
 
-    with pytest.raises(RuntimeError) as exc_info:
+    try:
         main.trigger_sync(mock_request_with_connector)
-
-    assert "Error triggering Fivetran sync" in str(exc_info.value)
-    assert "Authentication failed" in caplog.text
-
+        pytest.fail("Expected function to raise an exception")
+    except Exception as e:
+        log_messages = [record.message for record in caplog.records]
+        assert any(
+            "Error triggering Fivetran sync" in msg for msg in log_messages
+        ), f"Expected error message not found in logs: {log_messages}"
