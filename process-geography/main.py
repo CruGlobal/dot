@@ -743,14 +743,13 @@ def process_geo_time_zones():
     )
 
 
-@functions_framework.http
-def process_geography_data(request):
+def main():
     setup_logging()
     try:
         logger.info("Start processing geography data")
         print_memory_usage("Before processing:")
-        # process_geo_admin_1_codes()
-        # print_memory_usage("After process_geo_admin_1_codes:")
+        process_geo_admin_1_codes()
+        print_memory_usage("After process_geo_admin_1_codes:")
 
         process_geo_admin_2_codes()
         print_memory_usage("After process_geo_admin_2_codes:")
@@ -813,3 +812,7 @@ def process_geography_data(request):
     except Exception as e:
         logger.exception(f"Error processing geography data: {str(e)}")
         raise
+
+
+if __name__ == "__main__":
+    main()
