@@ -3,7 +3,6 @@ import requests
 import re
 import logging
 import sys
-import functions_framework
 import json
 from urllib.parse import urlparse
 from bigquery_client import BigQueryClient
@@ -12,19 +11,13 @@ import zipfile
 from datetime import date
 import io
 from typing import Tuple, List, Dict, Any
-import resource
 import gc
 
 logger = logging.getLogger("primary_logger")
 logger.propagate = False
-
-project_name = "cru-data-warehouse-elt-stage"
-dataset_name = "el_geography"
+project_name = os.environ.get("BIGQUERY_PROJECT_NAME", None)
+dataset_name = os.environ.get("BIGQUERY_DATASET_NAME", None)
 client = BigQueryClient(project=project_name)
-
-
-def env_var(name):
-    return os.environ[name]
 
 
 class CloudLoggingFormatter(logging.Formatter):
@@ -95,15 +88,12 @@ def get_authentication(url: str) -> Tuple[Dict[str, str], Any]:
     auth = None
 
     if "geonames" in url_domain:
-        geonames_username = env_var("GEONAMES_USERNAME")
-        geonames_username = geonames_username.strip()
-        geonames_password = env_var("GEONAMES_PASSWORD")
-        geonames_password = geonames_password.strip()
+        geonames_username = os.environ.get("GEONAMES_USERNAME", None).strip()
+        geonames_password = os.environ.get("GEONAMES_PASSWORD", None).strip()
         auth = (geonames_username, geonames_password)
         return url, auth
     elif "maxmind" in url_domain:
-        maxmind_license_key = env_var("MAXMIND_LICENSE_KEY")
-        maxmind_license_key = maxmind_license_key.strip()
+        maxmind_license_key = os.environ.get("MAXMIND_LICENSE_KEY", None).strip()
         url = url + f"&license_key={maxmind_license_key}"
         return url, None
 
@@ -268,13 +258,8 @@ def load_to_dataframe(
         raise
 
 
-def print_memory_usage(message=""):
-    """Prints the current memory usage."""
-    memory_usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    logger.info(f"{message} Current Memory Usage: {memory_usage/1024:.2f} MB")
-
-
 def process_geo_admin_1_codes():
+    """Process geo_admin_1_codes data."""
     table_name = "geo_admin_1_codes"
     url = "https://www.geonames.org/premiumdata/latest/admin1CodesASCII.txt"
     schema = [
@@ -295,6 +280,7 @@ def process_geo_admin_1_codes():
 
 
 def process_geo_admin_2_codes():
+    """Process geo_admin_2_codes data."""
     table_name = "geo_admin_2_codes"
     url = "https://www.geonames.org/premiumdata/latest/admin2Codes.txt"
     schema = [
@@ -315,6 +301,7 @@ def process_geo_admin_2_codes():
 
 
 def process_geo_admincode_5():
+    """Process geo_admincode_5 data."""
     table_name = "geo_admin5_code"
     url = "https://www.geonames.org/premiumdata/latest/adminCode5.zip"
     schema = [
@@ -333,6 +320,7 @@ def process_geo_admincode_5():
 
 
 def process_geo_all_countries():
+    """Process geo_all_countries data."""
     table_name = "geo_all_countries"
     url = "https://www.geonames.org/premiumdata/latest/allCountries.zip"
     schema = [
@@ -365,9 +353,12 @@ def process_geo_all_countries():
         "overwrite",
         schema,
     )
+    del df
+    gc.collect()
 
 
 def process_geo_all_countries_deleted():
+    """Process geo_all_countries_deleted data."""
     table_name = "geo_all_countries_deleted"
     url = "https://www.geonames.org/premiumdata/latest/deletes.txt"
     schema = [
@@ -387,6 +378,7 @@ def process_geo_all_countries_deleted():
 
 
 def process_geo_all_countries_modified():
+    """Process geo_all_countries_modified data."""
     table_name = "geo_all_countries_modified"
     url = "https://www.geonames.org/premiumdata/latest/modifications.zip"
     schema = [
@@ -423,6 +415,7 @@ def process_geo_all_countries_modified():
 
 
 def process_geo_alternate_names_deleted():
+    """Process geo_alternate_names_deleted data."""
     table_name = "geo_alternate_names_deleted"
     url = "https://www.geonames.org/premiumdata/latest/alternateNamesDeletes.txt"
     schema = [
@@ -442,6 +435,7 @@ def process_geo_alternate_names_deleted():
 
 
 def process_geo_alternate_names_modified():
+    """Process geo_alternate_names_modified data."""
     table_name = "geo_alternate_names_modified"
     url = "https://www.geonames.org/premiumdata/latest/alternateNamesModifications.zip"
     schema = [
@@ -470,6 +464,7 @@ def process_geo_alternate_names_modified():
 
 
 def process_geo_alternate_names_v_2():
+    """Process geo_alternate_names_v_2 data."""
     table_name = "geo_alternate_names_v_2"
     url = "https://www.geonames.org/premiumdata/latest/alternateNamesV2.zip"
     schema = [
@@ -495,9 +490,12 @@ def process_geo_alternate_names_v_2():
         "overwrite",
         schema,
     )
+    del df
+    gc.collect()
 
 
 def process_geo_country_info():
+    """Process geo_country_info data."""
     table_name = "geo_country_info"
     url = "https://www.geonames.org/premiumdata/latest/countryInfo.txt"
     schema = [
@@ -532,6 +530,7 @@ def process_geo_country_info():
 
 
 def process_geo_feature_codes():
+    """Process geo_feature_codes data."""
     table_name = "geo_feature_codes"
     url = "https://www.geonames.org/premiumdata/latest/featureCodes_en.txt"
     schema = [
@@ -551,6 +550,7 @@ def process_geo_feature_codes():
 
 
 def process_geo_geoip_2_city_blocks_ipv6():
+    """Process geo_geoip_2_city_blocks_ipv6 data."""
     table_name = "geo_geoip_2_city_blocks_ipv6"
     url = "https://download.maxmind.com/app/geoip_download?edition_id=GeoIP2-City-CSV&suffix=zip"
     schema = [
@@ -580,9 +580,12 @@ def process_geo_geoip_2_city_blocks_ipv6():
         "overwrite",
         schema,
     )
+    del df
+    gc.collect()
 
 
 def process_geo_geoip_2_city_locations():
+    """Process geo_geoip_2_city_locations data."""
     table_name = "geo_geoip_2_city_locations"
     url = "https://download.maxmind.com/app/geoip_download?edition_id=GeoIP2-City-CSV&suffix=zip"
     schema = [
@@ -627,6 +630,7 @@ def process_geo_geoip_2_city_locations():
 
 
 def process_geo_geoip_2_country_blocks_ipv6():
+    """Process geo_geoip_2_country_blocks_ipv6 data."""
     table_name = "geo_geoip_2_country_blocks_ipv6"
     url = "https://download.maxmind.com/app/geoip_download?edition_id=GeoIP2-Country-CSV&suffix=zip"
     schema = [
@@ -656,6 +660,7 @@ def process_geo_geoip_2_country_blocks_ipv6():
 
 
 def process_geo_geoip_2_country_locations():
+    """Process geo_geoip_2_country_locations data."""
     table_name = "geo_geoip_2_country_locations"
     url = "https://download.maxmind.com/app/geoip_download?edition_id=GeoIP2-Country-CSV&suffix=zip"
     schema = [
@@ -684,6 +689,7 @@ def process_geo_geoip_2_country_locations():
 
 
 def process_geo_hierarchy():
+    """Process geo_hierarchy data."""
     table_name = "geo_hierarchy"
     url = "https://www.geonames.org/premiumdata/latest/hierarchy.zip"
     schema = [
@@ -703,6 +709,7 @@ def process_geo_hierarchy():
 
 
 def process_geo_iso_language_codes():
+    """Process geo_iso_language_codes data."""
     table_name = "geo_iso_language_codes"
     url = "https://www.geonames.org/premiumdata/latest/iso-languagecodes.txt"
     schema = [
@@ -723,6 +730,7 @@ def process_geo_iso_language_codes():
 
 
 def process_geo_time_zones():
+    """Process geo_time_zones data."""
     table_name = "geo_time_zones"
     url = "https://www.geonames.org/premiumdata/latest/timeZones.txt"
     schema = [
@@ -747,71 +755,28 @@ def main():
     setup_logging()
     try:
         logger.info("Start processing geography data")
-        print_memory_usage("Before processing:")
         process_geo_admin_1_codes()
-        print_memory_usage("After process_geo_admin_1_codes:")
-
         process_geo_admin_2_codes()
-        print_memory_usage("After process_geo_admin_2_codes:")
-
         process_geo_admincode_5()
-        print_memory_usage("After process_geo_admincode_5:")
-
         process_geo_all_countries()
-        print_memory_usage("After process_geo_all_countries:")
-        gc.collect()
-        print_memory_usage("After gc.collect():")
-
         process_geo_all_countries_deleted()
-        print_memory_usage("After process_geo_all_countries_deleted:")
-
         process_geo_all_countries_modified()
-        print_memory_usage("After process_geo_all_countries_modified:")
-
         process_geo_alternate_names_deleted()
-        print_memory_usage("After process_geo_alternate_names_deleted:")
-
         process_geo_alternate_names_modified()
-        print_memory_usage("After process_geo_alternate_names_modified:")
-
         process_geo_alternate_names_v_2()
-        print_memory_usage("After process_geo_alternate_names_v_2:")
-        gc.collect()
-        print_memory_usage("After gc.collect():")
-
         process_geo_country_info()
-        print_memory_usage("After process_geo_country_info:")
-
         process_geo_geoip_2_city_blocks_ipv6()
-        print_memory_usage("After process_geo_geoip_2_city_blocks_ipv6:")
-        gc.collect()
-        print_memory_usage("After gc.collect():")
-
         process_geo_geoip_2_city_locations()
-        print_memory_usage("After process_geo_geoip_2_city_locations:")
-
         process_geo_geoip_2_country_blocks_ipv6()
-        print_memory_usage("After process_geo_geoip_2_country_blocks_ipv6:")
-
         process_geo_geoip_2_country_locations()
-        print_memory_usage("After process_geo_geoip_2_country_locations:")
-
         process_geo_hierarchy()
-        print_memory_usage("After process_geo_hierarchy:")
-
         process_geo_feature_codes()
-        print_memory_usage("After process_geo_feature_codes:")
-
         process_geo_iso_language_codes()
-        print_memory_usage("After process_geo_iso_language_codes:")
-
         process_geo_time_zones()
-        print_memory_usage("After process_geo_time_zones:")
         logger.info("Processing geography data completed")
-        return "Geography data processing completed", 200
     except Exception as e:
         logger.exception(f"Error processing geography data: {str(e)}")
-        raise
+        sys.exit(1)
 
 
 if __name__ == "__main__":
