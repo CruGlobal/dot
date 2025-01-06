@@ -1,4 +1,4 @@
-name: Build & Deploy Cloudrun Functions
+name: Build & Deploy DBT Trigger
 
 on:
   push:
