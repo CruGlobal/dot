@@ -1,4 +1,4 @@
-name: Build & Deploy Cloudrun job
+name: Build & Deploy Cloudrun job Process Geography
 
 on:
   push:
