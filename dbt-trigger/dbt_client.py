@@ -10,7 +10,9 @@ class DbtClient:
     def __init__(self, access_token: str, account_id: str):
         self.access_token = access_token
         self.account_id = account_id
-        self.headers = {"Authorization": f"Bearer {access_token}"}
+        self.headers = {
+            "Authorization": f"Bearer {self.access_token}",
+        }
         self.account_url = f"https://cloud.getdbt.com/api/v2/accounts/{account_id}"
         self.base_url = "https://cloud.getdbt.com/api/v2"
 
@@ -31,7 +33,6 @@ class DbtClient:
 
     def trigger_job(self, job_id):
         logger.info(f"Triggering dbt job {job_id} on account {self.account_id}")
-
         response = self._request(
             f"{self.account_url}/jobs/{job_id}/run/",
             data={"cause": f"Triggered by Google Cloud Function"},

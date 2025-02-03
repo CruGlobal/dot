@@ -98,15 +98,21 @@ def trigger_dbt_job(request):
         logger.exception("Failed to retrieve job_id")
         raise
 
-    dbt_token = os.environ["DBT_TOKEN"]
+    dbt_token = os.environ.get("DBT_TOKEN", None).strip("\ufeff").strip()
+    if not dbt_token:
+        logger.exception("DBT token is missing or invalid.")
+        return "Internal error: missing DBT token", 500
     account_id = "10206"
     try:
         client = DbtClient(access_token=dbt_token, account_id=account_id)
         job_run_response = client.trigger_job(job_id)
-        run_id = job_run_response["data"]["id"]
-        if run_id is None:
-            logger.exception(f"dbt run failed to start.")
-            return
+        if not job_run_response:
+            logger.exception("No response received from the dbt job trigger endpoint.")
+            return "Failed to trigger dbt job", 500
+        run_id = job_run_response.get("data", {}).get("id")
+        if not run_id:
+            logger.exception("dbt job trigger response did not include a run ID.")
+            return "Failed to trigger dbt job", 500
         logger.info(f"DBT run {run_id} started successfully.")
         return "Trigger dbt job completed", 200
     except Exception as e:
