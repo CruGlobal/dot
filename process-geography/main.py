@@ -14,16 +14,13 @@ from typing import Tuple, List, Dict, Any
 import gc
 from google.cloud import pubsub_v1
 
-# from dotenv import load_dotenv
-
 logger = logging.getLogger("primary_logger")
 logger.propagate = False
-# load_dotenv()
 bigquery_project_name = os.environ.get("BIGQUERY_PROJECT_NAME", None)
-# print(f"bigquery_project_name: {bigquery_project_name}")
 bigquery_dataset_name = os.environ.get("BIGQUERY_DATASET_NAME", None)
 google_cloud_project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", None)
 client = BigQueryClient(project=bigquery_project_name)
+dbt_job_number = "23366"
 
 
 class CloudLoggingFormatter(logging.Formatter):
@@ -84,8 +81,6 @@ def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
     logger.exception(
         "Unhandled exception", exc_info=(exc_type, exc_value, exc_traceback)
     )
-    # Send an alert to the development team using a third-party service such as Datadog or PagerDuty
-    # TODO: Add code to send an alert to the development team
 
 
 def get_authentication(url: str) -> Tuple[Dict[str, str], Any]:
@@ -790,9 +785,10 @@ def main():
         # process_geo_iso_language_codes()
         # process_geo_time_zones()
         publish_pubsub_message(
-            {"message": "Processing geography data completed"},
+            {"job_id": dbt_job_number},
             "cloud-run-job-completed",
         )
+
         logger.info("Processing geography data completed")
     except Exception as e:
         logger.exception(f"Error processing geography data: {str(e)}")
