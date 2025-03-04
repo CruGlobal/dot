@@ -1,3 +1,4 @@
 requests==2.32.3
-google-cloud-bigquery[pandas]
 pandas==2.2.3
+google-cloud-bigquery[pandas]
+google-cloud-pubsub
