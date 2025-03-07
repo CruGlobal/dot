@@ -20,7 +20,7 @@ bigquery_project_name = os.environ.get("BIGQUERY_PROJECT_NAME", None)
 bigquery_dataset_name = os.environ.get("BIGQUERY_DATASET_NAME", None)
 google_cloud_project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", None)
 client = BigQueryClient(project=bigquery_project_name)
-dbt_job_number = "23366"
+dbt_job_number = "32227"
 
 
 class CloudLoggingFormatter(logging.Formatter):
@@ -767,23 +767,23 @@ def main():
     try:
         logger.info("Start processing geography data")
         process_geo_admin_1_codes()
-        # process_geo_admin_2_codes()
-        # process_geo_admincode_5()
-        # process_geo_all_countries()
-        # process_geo_all_countries_deleted()
-        # process_geo_all_countries_modified()
-        # process_geo_alternate_names_deleted()
-        # process_geo_alternate_names_modified()
-        # process_geo_alternate_names_v_2()
-        # process_geo_country_info()
-        # process_geo_geoip_2_city_blocks_ipv6()
-        # process_geo_geoip_2_city_locations()
-        # process_geo_geoip_2_country_blocks_ipv6()
-        # process_geo_geoip_2_country_locations()
-        # process_geo_hierarchy()
-        # process_geo_feature_codes()
-        # process_geo_iso_language_codes()
-        # process_geo_time_zones()
+        process_geo_admin_2_codes()
+        process_geo_admincode_5()
+        process_geo_all_countries()
+        process_geo_all_countries_deleted()
+        process_geo_all_countries_modified()
+        process_geo_alternate_names_deleted()
+        process_geo_alternate_names_modified()
+        process_geo_alternate_names_v_2()
+        process_geo_country_info()
+        process_geo_geoip_2_city_blocks_ipv6()
+        process_geo_geoip_2_city_locations()
+        process_geo_geoip_2_country_blocks_ipv6()
+        process_geo_geoip_2_country_locations()
+        process_geo_hierarchy()
+        process_geo_feature_codes()
+        process_geo_iso_language_codes()
+        process_geo_time_zones()
         publish_pubsub_message(
             {"job_id": dbt_job_number},
             "cloud-run-job-completed",
