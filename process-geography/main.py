@@ -12,12 +12,15 @@ from datetime import date
 import io
 from typing import Tuple, List, Dict, Any
 import gc
+from google.cloud import pubsub_v1
 
 logger = logging.getLogger("primary_logger")
 logger.propagate = False
-project_name = os.environ.get("BIGQUERY_PROJECT_NAME", None)
-dataset_name = os.environ.get("BIGQUERY_DATASET_NAME", None)
-client = BigQueryClient(project=project_name)
+bigquery_project_name = os.environ.get("BIGQUERY_PROJECT_NAME", None)
+bigquery_dataset_name = os.environ.get("BIGQUERY_DATASET_NAME", None)
+google_cloud_project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", None)
+client = BigQueryClient(project=bigquery_project_name)
+dbt_job_number = "32227"
 
 
 class CloudLoggingFormatter(logging.Formatter):
@@ -78,8 +81,6 @@ def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
     logger.exception(
         "Unhandled exception", exc_info=(exc_type, exc_value, exc_traceback)
     )
-    # Send an alert to the development team using a third-party service such as Datadog or PagerDuty
-    # TODO: Add code to send an alert to the development team
 
 
 def get_authentication(url: str) -> Tuple[Dict[str, str], Any]:
@@ -258,6 +259,16 @@ def load_to_dataframe(
         raise
 
 
+def publish_pubsub_message(data: Dict[str, Any], topic_name: str) -> None:
+    """Publishes a message to a Pub/Sub topic."""
+    publisher = pubsub_v1.PublisherClient()
+    topic_path = publisher.topic_path(google_cloud_project_id, topic_name)
+    data = json.dumps(data).encode("utf-8")
+    future = publisher.publish(topic_path, data)
+    future.result()
+    logger.info(f"Published message to Pub/Sub topic '{topic_name}'.")
+
+
 def process_geo_admin_1_codes():
     """Process geo_admin_1_codes data."""
     table_name = "geo_admin_1_codes"
@@ -272,7 +283,7 @@ def process_geo_admin_1_codes():
     df = load_to_dataframe(url, schema, skip_header_rows=0)
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -293,7 +304,7 @@ def process_geo_admin_2_codes():
     df = load_to_dataframe(url, schema, skip_header_rows=0)
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -312,7 +323,7 @@ def process_geo_admincode_5():
     df = load_to_dataframe(url, schema, skip_header_rows=0)
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -348,7 +359,7 @@ def process_geo_all_countries():
     df = load_to_dataframe(url, schema, skip_header_rows=0)
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -370,7 +381,7 @@ def process_geo_all_countries_deleted():
     df = load_to_dataframe(url, schema, skip_header_rows=0)
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "append",
         schema,
@@ -407,7 +418,7 @@ def process_geo_all_countries_modified():
     df["modification_date"] = pd.to_datetime(df["modification_date"]).dt.date
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -427,7 +438,7 @@ def process_geo_alternate_names_deleted():
     df = load_to_dataframe(url, schema, skip_header_rows=0)
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -456,7 +467,7 @@ def process_geo_alternate_names_modified():
     ]
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -485,7 +496,7 @@ def process_geo_alternate_names_v_2():
     )
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -522,7 +533,7 @@ def process_geo_country_info():
     df = load_to_dataframe(url, schema, skip_header_rows=50)
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -542,7 +553,7 @@ def process_geo_feature_codes():
     df = load_to_dataframe(url, schema, skip_header_rows=0)
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -575,7 +586,7 @@ def process_geo_geoip_2_city_blocks_ipv6():
     )
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -622,7 +633,7 @@ def process_geo_geoip_2_city_locations():
     ]
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -652,7 +663,7 @@ def process_geo_geoip_2_country_blocks_ipv6():
     df = df[df["geoname_id"].notnull()]
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -681,7 +692,7 @@ def process_geo_geoip_2_country_locations():
     )
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -701,7 +712,7 @@ def process_geo_hierarchy():
     df = load_to_dataframe(url, schema, skip_header_rows=0)
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -722,7 +733,7 @@ def process_geo_iso_language_codes():
     df = load_to_dataframe(url, schema, skip_header_rows=0)
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -744,7 +755,7 @@ def process_geo_time_zones():
     df = load_to_dataframe(url, schema)
     client.upload_from_dataframe(
         df,
-        dataset_name,
+        bigquery_dataset_name,
         table_name,
         "overwrite",
         schema,
@@ -773,6 +784,11 @@ def main():
         process_geo_feature_codes()
         process_geo_iso_language_codes()
         process_geo_time_zones()
+        publish_pubsub_message(
+            {"job_id": dbt_job_number},
+            "cloud-run-job-completed",
+        )
+
         logger.info("Processing geography data completed")
     except Exception as e:
         logger.exception(f"Error processing geography data: {str(e)}")

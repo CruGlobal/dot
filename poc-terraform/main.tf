@@ -40,9 +40,6 @@ module "process-geography" {
 
   secrets = ["GEONAMES_USERNAME", "GEONAMES_PASSWORD", "MAXMIND_LICENSE_KEY"]
 
-
-  secrets = ["API_KEY", "API_SECRET"]
-
   secret_managers = [
     "user:luis.rodriguez@cru.org",
     "user:matt.drees@cru.org",
@@ -50,6 +47,7 @@ module "process-geography" {
   ]
   project_id = local.project_id
 }
+
 
 module "dbt-triggers" {
   source      = "git::https://github.com/CruGlobal/cru-terraform-modules.git//gcp/cloudrun-function/scheduled-tasks?ref=v30.14.4"
