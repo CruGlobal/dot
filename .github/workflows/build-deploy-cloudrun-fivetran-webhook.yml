@@ -15,7 +15,7 @@ jobs:
     uses: CruGlobal/.github/.github/workflows/build-deploy-cloudrun-function.yml@v1
     with:
       function_name: fivetran-webhook
-      entry_point: trigger_sync
+      entry_point: webhook_handler
       runtime: python312
       environment: ${{ github.ref == 'refs/heads/main' && 'production' || github.ref == 'refs/heads/poc' && 'poc' || github.ref == 'refs/heads/staging' && 'staging' }}
     secrets:
