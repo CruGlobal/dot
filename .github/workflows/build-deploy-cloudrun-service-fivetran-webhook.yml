@@ -1,4 +1,4 @@
-name: Build & Deploy Cloudrun job Process Geography
+name: Build & Deploy Cloudrun Service Fivetran Webhook
 
 on:
   push:
