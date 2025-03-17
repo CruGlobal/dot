@@ -8,6 +8,8 @@ import os
 fivetran_api_key = os.environ.get("FIVETRAN_API_KEY", None)
 fivetran_api_secret = os.environ.get("FIVETRAN_API_SECRET", None)
 fivetran_webhook_secret = os.environ.get("FIVETRAN_WEBHOOK_SECRET", None)
+fivetran_webhook_url = os.environ.get("WEBHOOK_URL", None)
+
 a = HTTPBasicAuth(fivetran_api_key, fivetran_api_secret)
 # create new webhook for a given group
 
@@ -48,7 +50,7 @@ def create_group_webhook():
     method = "POST"  #'POST' 'PATCH' 'DELETE' 'GET'
     endpoint = "webhooks/group/" + group_id
     payload = {
-        "url": "https://webhook-handler-289484875682.us-central1.run.app",
+        "url": fivetran_webhook_url,
         "events": ["sync_start", "sync_end"],
         "secret": fivetran_webhook_secret,
         "active": True,
@@ -69,7 +71,7 @@ def create_account_webhook():
     method = "POST"  #'POST' 'PATCH' 'DELETE' 'GET'
     endpoint = "webhooks/account"
     payload = {
-        "url": "https://webhook-handler-289484875682.us-central1.run.app",
+        "url": fivetran_webhook_url,
         "events": [
             "sync_start",
             "sync_end",
