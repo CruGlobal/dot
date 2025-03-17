@@ -1,4 +1,4 @@
-name: Build & Deploy Cloudrun job Process Geography
+name: Build & Deploy Fivetran Webhook
 
 on:
   push:
@@ -11,10 +11,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  build_and_deploy:
-    uses: CruGlobal/.github/.github/workflows/build-deploy-cloudrun-service.yml@v1
+  build_and_deploy_fivetran_webhook:
+    uses: CruGlobal/.github/.github/workflows/build-deploy-cloudrun-function.yml@v1
     with:
-      job_name: fivetran-webhook
+      function_name: fivetran-webhook
+      entry_point: trigger_sync
+      runtime: python312
       environment: ${{ github.ref == 'refs/heads/main' && 'production' || github.ref == 'refs/heads/poc' && 'poc' || github.ref == 'refs/heads/staging' && 'staging' }}
     secrets:
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
