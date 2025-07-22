@@ -1,0 +1,72 @@
+[
+    {
+        "name": "id",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "name",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "label",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "status",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "lastUpdated",
+        "type": "TIMESTAMP",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "created",
+        "type": "TIMESTAMP",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "accessibility",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "visibility",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "features",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "signOnMode",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "credentials",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "settings",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "_links",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "licensing",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    }
+]

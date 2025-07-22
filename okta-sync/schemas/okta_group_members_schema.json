@@ -1,0 +1,72 @@
+[
+    {
+        "name": "id",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "status",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "created",
+        "type": "TIMESTAMP",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "activated",
+        "type": "TIMESTAMP",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "statusChanged",
+        "type": "TIMESTAMP",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "lastLogin",
+        "type": "TIMESTAMP",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "lastUpdated",
+        "type": "TIMESTAMP",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "passwordChanged",
+        "type": "TIMESTAMP",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "type",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "profile",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "credentials",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "_links",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "transitioningToStatus",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    },
+    {
+        "name": "group_id",
+        "type": "STRING",
+        "mode": "NULLABLE"
+    }
+]

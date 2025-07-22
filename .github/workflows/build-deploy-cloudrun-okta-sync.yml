@@ -1,0 +1,22 @@
+name: Build & Deploy Okta Sync
+
+on:
+  push:
+    branches: 
+      - main
+      - poc
+      - staging
+    paths:
+      - 'okta-sync/**'
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    uses: CruGlobal/.github/.github/workflows/build-deploy-cloudrun-job.yml@v1
+    with:
+      workload-identity-provider: projects/106717598109/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider
+      service-account: github-actions@cru-data-orchestration-poc.iam.gserviceaccount.com
+      job-name: okta-sync
+      entry-point: trigger_sync
+      runtime: python312
+      environment: ${{ github.ref == 'refs/heads/main' && 'production' || github.ref == 'refs/heads/staging' && 'staging' || 'poc' }}
