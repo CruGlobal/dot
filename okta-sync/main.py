@@ -730,13 +730,13 @@ def trigger_sync():
     """
     logger = logging.getLogger("primary_logger")
     logger.info("Starting Okta data synchronization job")
-    
+
     try:
         sync_data("apps")
-        sync_data("users") 
+        sync_data("users")
         sync_data("groups")
-        sync_all_users("group_members")
-        sync_all_users("app_users")
+        # sync_all_users("group_members")
+        # sync_all_users("app_users")
         replace_dataset_bigquery()
         dbt_run("10206", "85521", "DBT_TOKEN")
         upload_log()
@@ -755,5 +755,5 @@ def main():
 
 
 if __name__ == "__main__":
-    setup_logging() 
+    setup_logging()
     trigger_sync()

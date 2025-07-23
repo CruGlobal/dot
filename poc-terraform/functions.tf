@@ -24,31 +24,6 @@ module "fivetran_trigger" {
   project_id = local.project_id
 }
 
-module "process-geography" {
-  source      = "git::https://github.com/CruGlobal/cru-terraform-modules.git//gcp/cloudrun-function/scheduled-tasks?ref=v30.14.4"
-  name        = "process-geography"
-  description = "Google Cloud Function to process geography data"
-  time_zone   = "UTC"
-  schedule = {
-    monthly-scheduler : {
-      cron : "0 2 10 * *",
-      argument = {
-        type = "monthly"
-      }
-    }
-  }
-
-  secrets = ["GEONAMES_USERNAME", "GEONAMES_PASSWORD", "MAXMIND_LICENSE_KEY"]
-
-  secret_managers = [
-    "user:luis.rodriguez@cru.org",
-    "user:matt.drees@cru.org",
-    "group:dps-gcp-role-data-engineers@cru.org",
-  ]
-  project_id = local.project_id
-}
-
-
 module "dbt-triggers" {
   source      = "git::https://github.com/CruGlobal/cru-terraform-modules.git//gcp/cloudrun-function/scheduled-tasks?ref=v30.14.4"
   name        = "dbt-trigger"
@@ -68,29 +43,6 @@ module "dbt-triggers" {
   secret_managers = [
     "user:luis.rodriguez@cru.org",
     "user:matt.drees@cru.org",
-    "group:dps-gcp-role-data-engineers@cru.org",
-  ]
-  project_id = local.project_id
-}
-
-module "okta-sync" {
-  source      = "git::https://github.com/CruGlobal/cru-terraform-modules.git//gcp/cloudrun-function/scheduled-tasks?ref=v30.14.4"
-  name        = "okta-sync"
-  description = "Synchronizes Okta user, group, and application data to BigQuery"
-  time_zone   = "UTC"
-  schedule = {
-    daily-sync : {
-      cron : "0 6 * * *",
-      argument = {}
-    }
-  }
-
-  secrets = ["OKTA_TOKEN", "DBT_TOKEN"]
-
-  secret_managers = [
-    "user:luis.rodriguez@cru.org",
-    "user:matt.drees@cru.org",
-    "user:tony.guan@cru.org",
     "group:dps-gcp-role-data-engineers@cru.org",
   ]
   project_id = local.project_id
