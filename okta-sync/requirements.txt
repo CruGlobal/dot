@@ -1,7 +1,6 @@
-cru-dse-utils>=0.1.7
 google-cloud-bigquery[pandas]
 google-cloud-storage
-google-cloud-secret-manager
+google-auth
 requests>=2.32.0
 pandas>=2.0.0
 python-json-logger>=2.0.0
