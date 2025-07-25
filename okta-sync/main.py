@@ -215,19 +215,19 @@ def get_data(
         data = r.json()
         links = r.links
         df = pd.DataFrame(data)
-        while "next" in links:  # comment out this while loop for testing
-            page_count += 1
-            url = links["next"]["url"]
-            logger.info(f"Downloading {endpoint} on page {page_count} from {url}")
-            params = {None: None}
-            r = get_request(url, headers, params)
-            if isinstance(r, requests.Response):
-                data_next = r.json()
-                links = r.links
-                df_next = pd.DataFrame(data_next)
-                df = pd.concat([df, df_next], axis=0, ignore_index=True)
-            else:
-                break
+        # while "next" in links:  # comment out this while loop for testing
+        #     page_count += 1
+        #     url = links["next"]["url"]
+        #     logger.info(f"Downloading {endpoint} on page {page_count} from {url}")
+        #     params = {None: None}
+        #     r = get_request(url, headers, params)
+        #     if isinstance(r, requests.Response):
+        #         data_next = r.json()
+        #         links = r.links
+        #         df_next = pd.DataFrame(data_next)
+        #         df = pd.concat([df, df_next], axis=0, ignore_index=True)
+        #     else:
+        #         break
         logger.info(f"All {endpoint} downloaded successfully.")
         return df
     else:
@@ -689,7 +689,7 @@ def sync_all_users(endpoint: str) -> None:
         "Content-Type": "application/json",
     }
     params = {"limit": "1000"} if endpoint == "group_members" else {"limit": "500"}
-    # ids = ids[:2]  # for testing
+    ids = ids[:2]  # for testing
     df = get_all_users(f"{endpoint.split('_')[0]}s", headers, params, ids, columns)
     df = match_schema(df, schema_json)
     df = df.drop_duplicates()
@@ -737,7 +737,7 @@ def trigger_sync():
         sync_all_users("group_members")
         sync_all_users("app_users")
         replace_dataset_bigquery()
-        dbt_run("10206", "85521", "DBT_TOKEN")
+        # dbt_run("10206", "85521", "DBT_TOKEN")
         upload_log()
         logger.info("Okta data synchronization job completed successfully")
     except Exception as e:
