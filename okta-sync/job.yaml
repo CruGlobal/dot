@@ -1,0 +1,38 @@
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: okta-sync
+  labels:
+    run.googleapis.com/cpu-throttling: "false"
+spec:
+  spec:
+    template:
+      spec:
+        template:
+          spec:
+            maxRetries: 1
+            timeoutSeconds: 3600
+            serviceAccountName: okta-sync-sa@cru-data-orchestration-poc.iam.gserviceaccount.com
+            containers:
+            - name: okta-sync
+              image: us-central1-docker.pkg.dev/cru-data-orchestration-poc/gcrj-artifacts/okta-sync:latest
+              env:
+              - name: GOOGLE_CLOUD_PROJECT
+                value: cru-data-warehouse-elt-prod
+              - name: BIGQUERY_PROJECT_NAME
+                value: cru-data-warehouse-elt-prod
+              - name: OKTA_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: okta-sync_OKTA_TOKEN
+                    key: latest
+              - name: DBT_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: okta-sync_DBT_TOKEN
+                    key: latest
+              resources:
+                limits:
+                  memory: 8Gi
+                  cpu: 2000m
+        restartPolicy: Never

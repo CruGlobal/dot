@@ -1,0 +1,3 @@
+pytest==7.4.0
+pytest-mock==3.11.1
+unittest-mock==1.0.1
