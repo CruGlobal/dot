@@ -4,7 +4,7 @@ locals {
   env              = "poc"
 
   project_id = "cru-data-orchestration-${local.env}"
-  region     = "us-east4"
+  region     = "us-central1"
   domain     = "${local.identifier}-${local.env}.cru.org"
 
   tags = {

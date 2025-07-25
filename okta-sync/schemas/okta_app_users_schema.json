@@ -1,0 +1,58 @@
+[
+    {
+        "name": "id",
+        "type": "STRING"
+    },
+    {
+        "name": "externalId",
+        "type": "STRING"
+    },
+    {
+        "name": "created",
+        "type": "TIMESTAMP"
+    },
+    {
+        "name": "lastUpdated",
+        "type": "TIMESTAMP"
+    },
+    {
+        "name": "scope",
+        "type": "STRING"
+    },
+    {
+        "name": "status",
+        "type": "STRING"
+    },
+    {
+        "name": "statusChanged",
+        "type": "TIMESTAMP"
+    },
+    {
+        "name": "passwordChanged",
+        "type": "STRING"
+    },
+    {
+        "name": "syncState",
+        "type": "STRING"
+    },
+    {
+        "name": "lastSync",
+        "type": "STRING"
+    },
+    {
+        "name": "credentials",
+        "type": "STRING"
+    },
+    {
+        "name": "profile",
+        "type": "STRING"
+    },
+    {
+        "name": "_links",
+        "type": "STRING"
+    },
+    {
+        "name": "app_id",
+        "type": "STRING"
+    }
+]
