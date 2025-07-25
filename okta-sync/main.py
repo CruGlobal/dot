@@ -47,7 +47,7 @@ class SingletonConfig:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._folder_path = None
-            cls._instance._project_id = "cru-data-warehouse-elt-prod"
+            cls._instance._project_id = "cru-data-warehouse-elt-stage"
             cls._instance._dataset_id = "temp_okta"
             # cls._instance._target_dataset_id = "temp_okta2"  # for testing
             cls._instance._target_dataset_id = "el_okta"
