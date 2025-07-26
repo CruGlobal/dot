@@ -8,6 +8,7 @@ import requests
 from typing import List, Dict, Any, Optional, Union
 import pandas as pd
 from pythonjsonlogger import jsonlogger
+import psutil
 from okta_sync_utils import (
     get_request,
     get_general_credentials,
@@ -160,6 +161,27 @@ def setup_logging() -> None:
     logger.addHandler(console_handler)
     # Set the custom excepthook function to handle unhandled exceptions
     sys.excepthook = handle_unhandled_exception
+
+
+def log_memory_usage(checkpoint: str = ""):
+    """
+    Logs current memory usage for monitoring and debugging.
+    
+    Args:
+        checkpoint (str): Description of where this is being called from
+    """
+    logger = logging.getLogger("primary_logger")
+    try:
+        memory = psutil.virtual_memory()
+        process = psutil.Process()
+        process_memory = process.memory_info()
+        
+        logger.info(f"Memory Usage {checkpoint}: "
+                   f"System: {memory.used / 1024**3:.2f}GB / {memory.total / 1024**3:.2f}GB "
+                   f"({memory.percent:.1f}%) | "
+                   f"Process: {process_memory.rss / 1024**3:.2f}GB")
+    except Exception as e:
+        logger.warning(f"Failed to get memory usage: {str(e)}")
 
 
 def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
@@ -729,17 +751,31 @@ def trigger_sync():
     """
     logger = logging.getLogger("primary_logger")
     logger.info("Starting Okta data synchronization job")
+    log_memory_usage("- Job Start")
 
     try:
         sync_data("apps")
+        log_memory_usage("- After Apps Sync")
+        
         sync_data("users")
+        log_memory_usage("- After Users Sync")
+        
         sync_data("groups")
+        log_memory_usage("- After Groups Sync")
+        
         sync_all_users("group_members")
+        log_memory_usage("- After Group Members Sync")
+        
         sync_all_users("app_users")
+        log_memory_usage("- After App Users Sync")
+        
         replace_dataset_bigquery()
+        log_memory_usage("- After Dataset Replace")
+        
         # dbt_run("10206", "85521", "DBT_TOKEN")
         # upload_log()
         logger.info("Okta data synchronization job completed successfully")
+        log_memory_usage("- Job Complete")
     except Exception as e:
         logger.exception(f"Okta sync job failed: {str(e)}")
         raise
