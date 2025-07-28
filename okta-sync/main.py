@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional, Union
 import pandas as pd
 from pythonjsonlogger import jsonlogger
 import psutil
+from google.cloud import pubsub_v1
 from okta_sync_utils import (
     get_request,
     get_general_credentials,
@@ -16,7 +17,6 @@ from okta_sync_utils import (
     download_from_bigquery_as_dataframe,
     query_bigquery_as_dataframe,
     upload_to_gcs,
-    dbt_run,
 )
 
 
@@ -50,7 +50,6 @@ class SingletonConfig:
             cls._instance._folder_path = None
             cls._instance._project_id = "cru-data-warehouse-elt-prod"
             cls._instance._dataset_id = "temp_okta"
-            # cls._instance._target_dataset_id = "temp_okta2"  # for testing
             cls._instance._target_dataset_id = "el_okta"
         return cls._instance
 
@@ -166,7 +165,7 @@ def setup_logging() -> None:
 def log_memory_usage(checkpoint: str = ""):
     """
     Logs current memory usage for monitoring and debugging.
-    
+
     Args:
         checkpoint (str): Description of where this is being called from
     """
@@ -175,13 +174,27 @@ def log_memory_usage(checkpoint: str = ""):
         memory = psutil.virtual_memory()
         process = psutil.Process()
         process_memory = process.memory_info()
-        
-        logger.info(f"Memory Usage {checkpoint}: "
-                   f"System: {memory.used / 1024**3:.2f}GB / {memory.total / 1024**3:.2f}GB "
-                   f"({memory.percent:.1f}%) | "
-                   f"Process: {process_memory.rss / 1024**3:.2f}GB")
+
+        logger.info(
+            f"Memory Usage {checkpoint}: "
+            f"System: {memory.used / 1024**3:.2f}GB / {memory.total / 1024**3:.2f}GB "
+            f"({memory.percent:.1f}%) | "
+            f"Process: {process_memory.rss / 1024**3:.2f}GB"
+        )
     except Exception as e:
         logger.warning(f"Failed to get memory usage: {str(e)}")
+
+
+def publish_pubsub_message(data: Dict[str, Any], topic_name: str) -> None:
+    """Publishes a message to a Pub/Sub topic."""
+    logger = logging.getLogger("primary_logger")
+    google_cloud_project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", None)
+    publisher = pubsub_v1.PublisherClient()
+    topic_path = publisher.topic_path(google_cloud_project_id, topic_name)
+    data_encoded = json.dumps(data).encode("utf-8")
+    future = publisher.publish(topic_path, data_encoded)
+    future.result()
+    logger.info(f"Published message to Pub/Sub topic '{topic_name}'.")
 
 
 def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
@@ -237,19 +250,19 @@ def get_data(
         data = r.json()
         links = r.links
         df = pd.DataFrame(data)
-        while "next" in links:  # comment out this while loop for testing
-            page_count += 1
-            url = links["next"]["url"]
-            logger.info(f"Downloading {endpoint} on page {page_count} from {url}")
-            params = {None: None}
-            r = get_request(url, headers, params)
-            if isinstance(r, requests.Response):
-                data_next = r.json()
-                links = r.links
-                df_next = pd.DataFrame(data_next)
-                df = pd.concat([df, df_next], axis=0, ignore_index=True)
-            else:
-                break
+        # while "next" in links:  # comment out this while loop for testing
+        #     page_count += 1
+        #     url = links["next"]["url"]
+        #     logger.info(f"Downloading {endpoint} on page {page_count} from {url}")
+        #     params = {None: None}
+        #     r = get_request(url, headers, params)
+        #     if isinstance(r, requests.Response):
+        #         data_next = r.json()
+        #         links = r.links
+        #         df_next = pd.DataFrame(data_next)
+        #         df = pd.concat([df, df_next], axis=0, ignore_index=True)
+        #     else:
+        #         break
         logger.info(f"All {endpoint} downloaded successfully.")
         return df
     else:
@@ -711,7 +724,7 @@ def sync_all_users(endpoint: str) -> None:
         "Content-Type": "application/json",
     }
     params = {"limit": "1000"} if endpoint == "group_members" else {"limit": "500"}
-    # ids = ids[:2]  # for testing
+    ids = ids[:2]  # for testing
     df = get_all_users(f"{endpoint.split('_')[0]}s", headers, params, ids, columns)
     df = match_schema(df, schema_json)
     df = df.drop_duplicates()
@@ -751,29 +764,37 @@ def trigger_sync():
     """
     logger = logging.getLogger("primary_logger")
     logger.info("Starting Okta data synchronization job")
+
     log_memory_usage("- Job Start")
 
     try:
         sync_data("apps")
         log_memory_usage("- After Apps Sync")
-        
+
         sync_data("users")
         log_memory_usage("- After Users Sync")
-        
+
         sync_data("groups")
         log_memory_usage("- After Groups Sync")
-        
+
         sync_all_users("group_members")
         log_memory_usage("- After Group Members Sync")
-        
+
         sync_all_users("app_users")
         log_memory_usage("- After App Users Sync")
-        
+
         replace_dataset_bigquery()
         log_memory_usage("- After Dataset Replace")
-        
-        # dbt_run("10206", "85521", "DBT_TOKEN")
+
+        # Trigger dbt job via Pub/Sub message
+        publish_pubsub_message(
+            {"job_id": "85521"},
+            "cloud-run-job-completed",
+        )
+        log_memory_usage("- After Pub/Sub Message")
+
         # upload_log()
+
         logger.info("Okta data synchronization job completed successfully")
         log_memory_usage("- Job Complete")
     except Exception as e:

@@ -1,5 +1,6 @@
 google-cloud-bigquery[pandas]
 google-cloud-storage
+google-cloud-pubsub
 google-auth
 requests>=2.32.0
 pandas>=2.0.0
