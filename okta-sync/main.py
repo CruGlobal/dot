@@ -789,7 +789,7 @@ def trigger_sync():
         # Trigger dbt job via Pub/Sub message
         publish_pubsub_message(
             # {"job_id": "85521"},
-            {"job_id": "23366"}
+            {"job_id": "23366"},
             "cloud-run-job-completed",
         )
         log_memory_usage("- After Pub/Sub Message")
