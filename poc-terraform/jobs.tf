@@ -59,3 +59,31 @@ module "okta_sync" {
   timeout     = 1800 # 30 minutes in seconds
   max_retries = 1
 }
+
+module "woo_sync" {
+  source   = "git::https://github.com/CruGlobal/cru-terraform-modules.git//gcp/cloudrun-job/scheduled-tasks?ref=v32.1.2"
+  paused   = false
+  name     = "woo-sync"
+  image    = "${local.region}-docker.pkg.dev/${local.project_id}/gcrj-artifacts/woo-sync:latest"
+  schedule = "0 5 * * *" # 5am daily
+
+  time_zone = "UTC"
+  secrets   = ["OKTA_TOKEN", "DBT_TOKEN"]
+  env_variables = {
+    GOOGLE_CLOUD_PROJECT = local.project_id
+  }
+
+  secret_managers = [
+    "user:luis.rodriguez@cru.org",
+    "user:matt.drees@cru.org",
+    "user:chad.kline@cru.org",
+    "group:dps-gcp-role-data-engineers@cru.org",
+  ]
+
+  project_id  = local.project_id
+  region      = local.region
+  cpu         = "2"
+  memory      = "4Gi"
+  timeout     = 1800 # 30 minutes in seconds
+  max_retries = 1
+}
