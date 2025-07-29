@@ -560,145 +560,6 @@ def process_geo_feature_codes():
     )
 
 
-def process_geo_geoip_2_city_blocks_ipv6():
-    """Process geo_geoip_2_city_blocks_ipv6 data."""
-    table_name = "geo_geoip_2_city_blocks_ipv6"
-    url = "https://download.maxmind.com/app/geoip_download?edition_id=GeoIP2-City-CSV&suffix=zip"
-    schema = [
-        ["network", "string"],
-        ["geoname_id", "integer"],
-        ["registered_country_geoname_id", "integer"],
-        ["represented_country_geoname_id", "integer"],
-        ["is_anonymous_proxy", "integer"],
-        ["is_satellite_provider", "integer"],
-        ["postal_code", "string"],
-        ["latitude", "float"],
-        ["longitude", "float"],
-        ["accuracy_radius", "integer"],
-        ["is_anycast", "integer"],
-    ]
-    logger.info(f"Processing {table_name}...")
-    df = load_to_dataframe(
-        url,
-        schema,
-        sep=",",
-        file_name_regex=r"GeoIP2-City-CSV_\d{8}\/GeoIP2-City-Blocks-IPv6.csv",
-    )
-    client.upload_from_dataframe(
-        df,
-        bigquery_dataset_name,
-        table_name,
-        "overwrite",
-        schema,
-    )
-    del df
-    gc.collect()
-
-
-def process_geo_geoip_2_city_locations():
-    """Process geo_geoip_2_city_locations data."""
-    table_name = "geo_geoip_2_city_locations"
-    url = "https://download.maxmind.com/app/geoip_download?edition_id=GeoIP2-City-CSV&suffix=zip"
-    schema = [
-        ["geoname_id", "integer"],
-        ["locale_code", "string"],
-        ["continent_code", "string"],
-        ["continent_name", "string"],
-        ["country_iso_code", "string"],
-        ["country_name", "string"],
-        ["subdivision_1_iso_code", "string"],
-        ["subdivision_1_name", "string"],
-        ["subdivision_2_iso_code", "string"],
-        ["subdivision_2_name", "string"],
-        ["city_name", "string"],
-        ["metro_code", "string"],
-        ["time_zone", "string"],
-        ["is_in_european_union", "integer"],
-    ]
-    logger.info(f"Processing {table_name}...")
-    df = load_to_dataframe(
-        url,
-        schema,
-        sep=",",
-        file_name_regex=r"GeoIP2-City-CSV_\d{8}\/GeoIP2-City-Locations-en\.csv",
-    )
-    schema = [
-        ["geoname_id", "integer"],
-        ["locale_code", "string"],
-        ["continent_code", "string"],
-        ["continent_name", "string"],
-        ["country_iso_code", "string"],
-        ["country_name", "string"],
-        ["is_in_european_union", "integer"],
-    ]
-    client.upload_from_dataframe(
-        df,
-        bigquery_dataset_name,
-        table_name,
-        "overwrite",
-        schema,
-    )
-
-
-def process_geo_geoip_2_country_blocks_ipv6():
-    """Process geo_geoip_2_country_blocks_ipv6 data."""
-    table_name = "geo_geoip_2_country_blocks_ipv6"
-    url = "https://download.maxmind.com/app/geoip_download?edition_id=GeoIP2-Country-CSV&suffix=zip"
-    schema = [
-        ["network", "string"],
-        ["geoname_id", "integer"],
-        ["registered_country_geoname_id", "integer"],
-        ["represented_country_geoname_id", "integer"],
-        ["is_anonymous_proxy", "integer"],
-        ["is_satellite_provider", "integer"],
-        ["is_anycast", "integer"],
-    ]
-    logger.info(f"Processing {table_name}...")
-    df = load_to_dataframe(
-        url,
-        schema,
-        sep=",",
-        file_name_regex=r"GeoIP2-Country-CSV_\d{8}\/GeoIP2-Country-Blocks-IPv6.csv",
-    )
-    df = df[df["geoname_id"].notnull()]
-    client.upload_from_dataframe(
-        df,
-        bigquery_dataset_name,
-        table_name,
-        "overwrite",
-        schema,
-    )
-
-
-def process_geo_geoip_2_country_locations():
-    """Process geo_geoip_2_country_locations data."""
-    table_name = "geo_geoip_2_country_locations"
-    url = "https://download.maxmind.com/app/geoip_download?edition_id=GeoIP2-Country-CSV&suffix=zip"
-    schema = [
-        ["geoname_id", "integer"],
-        ["locale_code", "string"],
-        ["continent_code", "string"],
-        ["continent_name", "string"],
-        ["country_iso_code", "string"],
-        ["country_name", "string"],
-        ["is_in_european_union", "integer"],
-    ]
-    logger.info(f"Processing {table_name}...")
-    df = load_to_dataframe(
-        url,
-        schema,
-        sep=",",
-        file_name_regex=r"GeoIP2-Country-CSV_\d{8}\/GeoIP2-Country-Locations-en\.csv",
-    )
-    client.upload_from_dataframe(
-        df,
-        bigquery_dataset_name,
-        table_name,
-        "overwrite",
-        schema,
-    )
-
-
 def process_geo_hierarchy():
     """Process geo_hierarchy data."""
     table_name = "geo_hierarchy"
@@ -776,13 +637,9 @@ def main():
         process_geo_alternate_names_modified()
         process_geo_alternate_names_v_2()
         process_geo_country_info()
-        process_geo_geoip_2_city_blocks_ipv6()
-        process_geo_geoip_2_city_locations()
-        process_geo_geoip_2_country_blocks_ipv6()
-        process_geo_geoip_2_country_locations()
-        process_geo_hierarchy()
-        process_geo_feature_codes()
-        process_geo_iso_language_codes()
+        # process_geo_hierarchy()
+        # process_geo_feature_codes()
+        # process_geo_iso_language_codes()
         process_geo_time_zones()
         publish_pubsub_message(
             {"job_id": dbt_job_number},
