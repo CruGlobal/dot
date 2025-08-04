@@ -64,7 +64,7 @@ module "woo_sync" {
   source   = "git::https://github.com/CruGlobal/cru-terraform-modules.git//gcp/cloudrun-job/scheduled-tasks?ref=v32.1.2"
   paused   = false
   name     = "woo-sync"
-  image    = "${local.region}-docker.pkg.dev/${local.project_id}/gcrj-artifacts/woo-sync:latest"
+  image    = "us-docker.pkg.dev/cloudrun/container/job:latest"
   schedule = "0 5 * * *" # 5am daily
 
   time_zone = "UTC"

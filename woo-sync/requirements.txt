@@ -1,4 +1,4 @@
   google-cloud-bigquery[pandas]
   google-cloud-storage
   requests>=2.32.0
-  pandas>=2.0.0
+  

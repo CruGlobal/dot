@@ -1228,12 +1228,12 @@ def trigger_sync():
     
         logger.info("BEGIN - FamilyLife order sync")  
         get_orders_and_items(env_var_list)
-        
-        logger.info("BEGIN - FamilyLife product sync")  
-        get_products_and_bundles(env_var_list)
 
         logger.info("BEGIN - FamilyLife refund sync")  
         get_refunds_and_items(env_var_list)
+        
+        logger.info("BEGIN - FamilyLife product sync")  
+        get_products_and_bundles(env_var_list)
 
         # CRU Store --------------------------------
         env_var_dict_cru = {
@@ -1253,11 +1253,11 @@ def trigger_sync():
         logger.info("BEGIN - CRU order sync")    
         get_orders_and_items(env_var_list)
 
-        logger.info("BEGIN - CRU product sync")    
-        get_products_and_bundles(env_var_list)
-
         logger.info("BEGIN - CRU refund sync")    
         get_refunds_and_items(env_var_list)
+
+        logger.info("BEGIN - CRU product sync")    
+        get_products_and_bundles(env_var_list)
 
     except Exception as e:
         logger.exception(f"Error processing WooCommerce Api: {str(e)}")
