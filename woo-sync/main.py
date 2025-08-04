@@ -1259,6 +1259,7 @@ def trigger_sync():
         logger.info("BEGIN - CRU product sync")    
         get_products_and_bundles(env_var_list)
 
+
     except Exception as e:
         logger.exception(f"Error processing WooCommerce Api: {str(e)}")
         sys.exit(1)

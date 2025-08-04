@@ -66,6 +66,7 @@ module "woo_sync" {
   name     = "woo-sync"
   image    = "us-docker.pkg.dev/cloudrun/container/job:latest"
   schedule = "0 5 * * *" # 5am daily
+  
 
   time_zone = "UTC"
   secrets   = ["OKTA_TOKEN", "DBT_TOKEN"]
