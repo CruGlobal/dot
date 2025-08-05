@@ -1,6 +1,8 @@
 google-cloud-bigquery[pandas]
 google-cloud-storage
+google-cloud-pubsub
 google-auth
 requests>=2.32.0
 pandas>=2.0.0
 python-json-logger>=2.0.0
+psutil>=5.9.0

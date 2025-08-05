@@ -24,6 +24,8 @@ module "fivetran_trigger" {
   project_id = local.project_id
 }
 
+# End of fivetran_trigger module
+
 module "dbt-triggers" {
   source      = "git::https://github.com/CruGlobal/cru-terraform-modules.git//gcp/cloudrun-function/scheduled-tasks?ref=v30.14.4"
   name        = "dbt-trigger"
