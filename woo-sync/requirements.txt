@@ -1,5 +1,42 @@
-  google-cloud-bigquery[pandas]
-  google-cloud-storage
-  requests>=2.32.0
-  
-  
+beautifulsoup4>=4.12.3
+cachetools>=5.5.1
+certifi>=2024.12.14
+charset-normalizer>=3.4.1
+DateTime>=5.5
+db-dtypes>=1.4.2
+google>=3.0.0
+google-api-core>=2.24.1
+google-auth>=2.38.0
+google-auth-oauthlib>=1.2.1
+google-cloud>=0.34.0
+google-cloud-bigquery>=3.31.0
+google-cloud-core>=2.4.2
+google-crc32c>=1.6.0
+google-resumable-media>=2.7.2
+googleapis-common-protos>=1.69.0
+grpcio>=1.71.0rc2
+grpcio-status>=1.71.0rc2
+idna>=3.10
+numpy>=2.2.2
+oauthlib>=3.2.2
+packaging>=24.2
+pandas>=2.2.3
+pandas-gbq>=0.28.0
+proto-plus>=1.26.0
+protobuf>=5.29.3
+pyarrow>=19.0.1
+pyasn1>=0.6.1
+pyasn1_modules>=0.4.1
+pydata-google-auth>=1.9.1
+python-dateutil>=2.9.0.post0
+python-dotenv>=1.1.0
+pytz>=2024.2
+requests>=2.32.0
+requests-oauthlib>=2.0.0
+rsa>=4.9
+setuptools>=75.8.0
+six>=1.17.0
+soupsieve>=2.6
+tzdata>=2025.1
+urllib3>=2.3.0
+zope.interface>=7.2

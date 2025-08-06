@@ -69,9 +69,21 @@ module "woo_sync" {
   
 
   time_zone = "UTC"
-  secrets   = ["OKTA_TOKEN", "DBT_TOKEN"]
+  secrets   = ["WOO_API_CLIENT_ID", "WOO_API_CLIENT_SECRET"]
   env_variables = {
     GOOGLE_CLOUD_PROJECT = local.project_id
+    FL_RLS_VALUE = "familylife_woo"
+    FL_STORE_WID = "-2088561343579951637"
+    CRU_RLS_VALUE = "cru_woo"
+    CRU_STORE_WID = "-4889130622699552160"
+    BIGQUERY_PROJECT_NAME = "cru-dw-devs-chad-kline"
+    BIGQUERY_DATASET_NAME = "el_woocommerce_api"
+    FL_API_ORDERS = "https://shop.familylife.com/wp-json/wc/v3/orders"
+    FL_API_PRODUCTS = "https://shop.familylife.com/wp-json/wc/v3/products"
+    FL_API_REFUNDS = "https://shop.familylife.com/wp-json/wc/v3/refunds"
+    CRU_API_ORDERS = "https://crustore.org/wp-json/wc/v3/orders"
+    CRU_API_PRODUCTS = "https://crustore.org/wp-json/wc/v3/products"
+    CRU_API_REFUNDS = "https://crustore.org/wp-json/wc/v3/refunds"
   }
 
   secret_managers = [
