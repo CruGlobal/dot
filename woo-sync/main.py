@@ -22,7 +22,7 @@ client = BigQueryClient(project=project_name)
 
 GET_LAST_LOAD_ORDERS= """
     select sync_timestamp 
-    from `cru-dw-devs-chad-kline.el_woocommerce_api.woo_api_orders`
+    from `cru-data-warehouse-elt-prod.el_woocommerce_api.woo_api_orders`
     group by sync_timestamp
     order by sync_timestamp desc 
     limit 1
