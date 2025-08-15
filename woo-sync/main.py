@@ -1,4 +1,3 @@
-from dotenv import load_dotenv
 import os
 import requests
 import json
@@ -15,14 +14,23 @@ from google.cloud import bigquery
 from decimal import Decimal, getcontext
 from collections import Counter
 
-load_dotenv()
 project_name = os.environ.get("BIGQUERY_PROJECT_NAME", None)
 dataset_name = os.environ.get("BIGQUERY_DATASET_NAME", None)
 client = BigQueryClient(project=project_name)
 
-GET_LAST_LOAD_ORDERS= """
+GET_CRU_LAST_LOAD_ORDERS= """
     select sync_timestamp 
     from `cru-data-warehouse-elt-prod.el_woocommerce_api.woo_api_orders`
+    where rls_value = 'cru_woo'
+    group by sync_timestamp
+    order by sync_timestamp desc 
+    limit 1
+"""
+
+GET_FL_LAST_LOAD_ORDERS= """
+    select sync_timestamp 
+    from `cru-data-warehouse-elt-prod.el_woocommerce_api.woo_api_orders`
+    where rls_value = 'familylife_woo'
     group by sync_timestamp
     order by sync_timestamp desc 
     limit 1
@@ -1209,36 +1217,12 @@ def trigger_sync():
 
     try:
         sync_timestamp = str(datetime.now(timezone.utc))
-        order_last_update_date_time = get_last_load_date_time(GET_LAST_LOAD_ORDERS)
         
-        # FamilyLife Store --------------------------------
-        env_var_dict_fl = {
-            "sync_timestamp": sync_timestamp,
-            "order_last_update_date_time": order_last_update_date_time,
-            "store_wid": os.getenv("FL_STORE_WID", None),
-            "rls_value": os.environ.get("FL_RLS_VALUE", None),
-            "woo_api_client_id": os.environ.get("WOO_API_CLIENT_ID", None),
-            "woo_api_client_secret": os.environ.get("WOO_API_CLIENT_SECRET", None),
-            "orders_api_url": os.environ.get("FL_API_ORDERS", None),
-            "products_api_url": os.environ.get("FL_API_PRODUCTS", None),
-            "refunds_api_url": os.environ.get("FL_API_REFUNDS", None),
-        }
-        env_var_string = json.dumps(env_var_dict_fl)
-        env_var_list = json.loads(env_var_string)
-    
-        logger.info("BEGIN - FamilyLife order sync")  
-        get_orders_and_items(env_var_list)
-
-        logger.info("BEGIN - FamilyLife refund sync")  
-        get_refunds_and_items(env_var_list)
-        
-        logger.info("BEGIN - FamilyLife product sync")  
-        get_products_and_bundles(env_var_list)
-
         # CRU Store --------------------------------
+        cru_order_last_update_date_time = get_last_load_date_time(GET_CRU_LAST_LOAD_ORDERS)
         env_var_dict_cru = {
             "sync_timestamp": sync_timestamp,
-            "order_last_update_date_time": order_last_update_date_time,
+            "order_last_update_date_time": cru_order_last_update_date_time,
             "store_wid": os.getenv("CRU_STORE_WID", None),
             "rls_value": os.environ.get("CRU_RLS_VALUE", None),
             "woo_api_client_id": os.environ.get("WOO_API_CLIENT_ID", None),
@@ -1258,7 +1242,31 @@ def trigger_sync():
 
         logger.info("BEGIN - CRU product sync")    
         get_products_and_bundles(env_var_list)
+        
+        # FamilyLife Store --------------------------------
+        fl_order_last_update_date_time = get_last_load_date_time(GET_FL_LAST_LOAD_ORDERS)
+        env_var_dict_fl = {
+            "sync_timestamp": sync_timestamp,
+            "order_last_update_date_time": fl_order_last_update_date_time,
+            "store_wid": os.getenv("FL_STORE_WID", None),
+            "rls_value": os.environ.get("FL_RLS_VALUE", None),
+            "woo_api_client_id": os.environ.get("WOO_API_CLIENT_ID", None),
+            "woo_api_client_secret": os.environ.get("WOO_API_CLIENT_SECRET", None),
+            "orders_api_url": os.environ.get("FL_API_ORDERS", None),
+            "products_api_url": os.environ.get("FL_API_PRODUCTS", None),
+            "refunds_api_url": os.environ.get("FL_API_REFUNDS", None),
+        }
+        env_var_string = json.dumps(env_var_dict_fl)
+        env_var_list = json.loads(env_var_string)
+    
+        logger.info("BEGIN - FamilyLife order sync")  
+        get_orders_and_items(env_var_list)
 
+        logger.info("BEGIN - FamilyLife refund sync")  
+        get_refunds_and_items(env_var_list)
+        
+        logger.info("BEGIN - FamilyLife product sync")  
+        get_products_and_bundles(env_var_list)
 
     except Exception as e:
         logger.exception(f"Error processing WooCommerce Api: {str(e)}")
