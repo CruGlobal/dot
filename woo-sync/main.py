@@ -1272,4 +1272,7 @@ def trigger_sync():
         logger.exception(f"Error processing WooCommerce Api: {str(e)}")
         sys.exit(1)
 
+if __name__ == "__main__":
+    trigger_sync()
+
 
