@@ -7,7 +7,7 @@ module "woo_sync" {
   source   = "git::https://github.com/CruGlobal/cru-terraform-modules.git//gcp/cloudrun-job/scheduled-tasks?ref=v32.1.2"
   paused   = false
   name     = "woo-sync"
-  image    = "us-docker.pkg.dev/cloudrun/container/job:latest"
+  image    = "${local.region}-docker.pkg.dev/${local.project_id}/gcrj-artifacts/okta-sync:latest"
   schedule = "0 0 1 1 *" 
   
 
