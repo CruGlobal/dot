@@ -31,6 +31,7 @@ pyasn1_modules>=0.4.1
 pydata-google-auth>=1.9.1
 python-dateutil>=2.9.0.post0
 python-dotenv>=1.1.0
+python-json-logger>=2.0.0
 pytz>=2024.2
 requests>=2.32.0
 requests-oauthlib>=2.0.0
