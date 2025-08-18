@@ -4,6 +4,7 @@ import json
 import logging
 import sys
 import pandas as pd
+from pythonjsonlogger import jsonlogger
 import base64
 import time
 import psutil
@@ -37,6 +38,146 @@ GET_FL_LAST_LOAD_ORDERS= """
 """
 
 ## SCRIPT UTILITIES -------------------------------------------------------------------------------------------------------------------------------------------
+class SingletonConfig:
+    """
+    A singleton class that provides global configuration settings for the application.
+
+    Attributes:
+        _instance (SingletonConfig): The singleton instance of the class.
+        _folder_path (str): The path to the log folder.
+        _project_id (str): The ID of the BigQuery project.
+        _dataset_id (str): The ID of the temporary dataset in BigQuery.
+        _target_dataset_id (str): The ID of the target dataset in BigQuery.
+    """
+
+    _instance = None
+    _folder_path = None
+    _project_id = None
+    _dataset_id = None
+    _target_dataset_id = None
+
+    def __new__(cls):
+        """
+        Creates a new instance of the SingletonConfig class if one does not already exist.
+
+        Returns:
+            SingletonConfig: The singleton instance of the class.
+        """
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._folder_path = None
+            cls._instance._project_id = "cru-data-warehouse-elt-prod"
+            cls._instance._dataset_id = "temp_okta"
+            cls._instance._target_dataset_id = "el_okta"
+        return cls._instance
+
+    def create_log_folder(self):
+        """
+        Creates a log folder with the starting date as the folder name.
+        """
+        if self._folder_path is None:
+            current_folder = os.path.dirname(os.path.abspath(__file__))
+            sub_folder = datetime.now().strftime("%Y-%m-%d")
+            self._folder_path = os.path.join(current_folder, sub_folder)
+            os.makedirs(self._folder_path, exist_ok=True)
+
+    @property
+    def log_path(self) -> str:
+        """
+        Returns the path to the log folder.
+
+        Returns:
+            str: The path to the log folder.
+
+        Raises:
+            ValueError: If the folder path has not been created yet.
+        """
+        if self._folder_path is not None:
+            return self._folder_path
+        else:
+            raise ValueError("Folder path has not been created yet")
+
+    @property
+    def project_id(self) -> str:
+        """
+        Returns the project_id of the BigQuery project.
+
+        Returns:
+            str: The project_id of the BigQuery project.
+
+        Raises:
+            ValueError: If the project_id has not been set yet.
+        """
+        if self._project_id is not None:
+            return self._project_id
+        else:
+            raise ValueError("Project ID has not been set yet")
+
+    @property
+    def dataset_id(self) -> str:
+        """
+        Returns the project_id of the temp dataset in BigQuery.
+
+        Returns:
+            str: The project_id of the temp dataset in BigQuery.
+
+        Raises:
+            ValueError: If the temp project_id has not been set yet.
+        """
+        if self._dataset_id is not None:
+            return self._dataset_id
+        else:
+            raise ValueError("Dataset ID has not been set yet")
+
+    @property
+    def target_dataset_id(self) -> str:
+        """
+        Returns the project_id of the target dataset in BigQuery.
+
+        Returns:
+            str: The project_id of the target dataset in BigQuery.
+
+        Raises:
+            ValueError: If the target project_id has not been set yet.
+        """
+        if self._target_dataset_id is not None:
+            return self._target_dataset_id
+        else:
+            raise ValueError("Target Dataset ID has not been set yet")
+
+def setup_logging() -> None:
+    """
+    Sets up logging for the application.
+
+    This function creates a log folder with the starting date as the folder name, and sets up two logging handlers:
+    one that writes log messages to a file in the log folder,
+    and another that writes log messages to the console/stdout which will end up in Cloud Run Logs.
+    The log messages are formatted as JSON objects with the following keys:
+    - asctime: The time the log message was created, in UTC.
+    - status: The logging level (levelname) of the message (e.g., INFO, WARNING, ERROR).
+    - message: The log message itself.
+
+    Raises:
+        ValueError: If the log folder path has not been created yet.
+    """
+    ci = SingletonConfig()
+    ci.create_log_folder()
+    file_name = "output.log"
+    logfile = os.path.join(ci.log_path, file_name)
+    json_formatter = jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(message)s")
+    file_handler = logging.FileHandler(logfile)
+    console_handler = logging.StreamHandler(stream=sys.stdout)
+    file_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(json_formatter)
+    console_handler.setFormatter(json_formatter)
+    logger = logging.getLogger("primary_logger")
+    logger.setLevel(logging.INFO)
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    # Set the custom excepthook function to handle unhandled exceptions
+    sys.excepthook = handle_unhandled_exception
+
 def log_memory_usage(checkpoint: str = ""):
     """
     Logs current memory usage for monitoring and debugging.
