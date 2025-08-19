@@ -19,7 +19,7 @@ module "woo_sync" {
     FL_STORE_WID = "-2088561343579951637"
     CRU_RLS_VALUE = "cru_woo"
     CRU_STORE_WID = "-4889130622699552160"
-    BIGQUERY_PROJECT_NAME = "cru-data-warehouse-elt-prod"
+    BIGQUERY_PROJECT_NAME = "cru-data-orchestration-poc"
     BIGQUERY_DATASET_NAME = "el_woocommerce_api"
     FL_API_ORDERS = "https://shop.familylife.com/wp-json/wc/v3/orders"
     FL_API_PRODUCTS = "https://shop.familylife.com/wp-json/wc/v3/products"
