@@ -19,9 +19,6 @@ project_name = os.environ.get("BIGQUERY_PROJECT_NAME", None)
 dataset_name = os.environ.get("BIGQUERY_DATASET_NAME", None)
 client = BigQueryClient(project=project_name)
 
-logger = logging.getLogger("primary_logger")
-logger.info(project_name)
-
 GET_CRU_LAST_LOAD_ORDERS= """
     select sync_timestamp 
     from `cru-data-warehouse-elt-prod.el_woocommerce_api.woo_api_orders`
@@ -277,6 +274,8 @@ def get_last_load_date_time(obj):
     logger = logging.getLogger("primary_logger")
     query = obj
     client = bigquery.Client(project=project_name)
+    
+    logger.info(f"project: {project_name}")
 
     try:
         query_job = client.query(query)
