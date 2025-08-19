@@ -15,7 +15,7 @@ from google.cloud import bigquery
 from decimal import Decimal, getcontext
 from collections import Counter
 
-project_name = os.environ.get("BIGQUERY_EXECUTION_PROJECT_NAME", None)
+project_name = os.environ.get("BIGQUERY_PROJECT_NAME", None)
 dataset_name = os.environ.get("BIGQUERY_DATASET_NAME", None)
 client = BigQueryClient(project=project_name)
 
