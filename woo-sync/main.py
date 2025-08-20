@@ -825,9 +825,10 @@ def order_items(o, order_item_list, env_var_list):
         list.append(Decimal(str(component_regular_price)))
         list.append(component_sku)
         
-        cost = '0.00'
-        if li['cost'] != "":
-            cost = li['cost'] 
+        cost = 0
+        for y in li['meta_data']:
+            if y['key'] == "_alg_wc_cog_item_cost":
+                cost = y['value']           
         list.append(Decimal(str(cost)))
        
         dept = ''
