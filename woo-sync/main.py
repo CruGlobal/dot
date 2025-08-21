@@ -828,7 +828,9 @@ def order_items(o, order_item_list, env_var_list):
         cost = 0
         for y in li['meta_data']:
             if y['key'] == "_alg_wc_cog_item_cost":
-                cost = y['value']           
+                cost = y['value'] 
+        if not isinstance(cost, (int, float)):
+            cost = 0         
         list.append(Decimal(str(cost)))
        
         dept = ''
@@ -1201,6 +1203,10 @@ def refund_items(r, refund_item_list, env_var_list):
             if y['key'] == "_alg_wc_cog_item_cost":
                 product_component_cost = y['value']
                 product_cost = y['value']
+        if not isinstance(product_component_cost, (int, float)):
+            product_component_cost = 0  
+        if not isinstance(product_cost, (int, float)):
+            product_cost = 0             
         list.append(Decimal(str(product_component_cost)))               
         list.append(Decimal(str(product_cost)))
 
