@@ -437,6 +437,7 @@ def process_order_items(list):
         ["product_total_manuals", "string"],
         ["product_weight", "bignumeric"],
         ["products_per_case", "integer"],
+        ["bundled_by", "integer"],
         ["timestamp", "integer"],
     ]
     logger.info(f"Processing {table_name}...")
@@ -912,6 +913,11 @@ def order_items(o, order_item_list, env_var_list):
             if li['per_case'] != "":
                 per_case = li['per_case'] 
         list.append(int(per_case)) 
+
+        bundled_by = 0
+        if li['bundled_by'] != "":
+            bundled_by = int(str(li['bundled_by']))
+        list.append(bundled_by)
 
         list.append(int(time.time()))
 
