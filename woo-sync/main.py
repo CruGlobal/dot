@@ -792,6 +792,7 @@ def order_items(o, order_item_list, env_var_list):
     """
     This function loops through an order's line_items and pulls out needed info
     """
+    donor_premium = 'false'
     for li in o['line_items']:
         
         list = []
@@ -840,7 +841,6 @@ def order_items(o, order_item_list, env_var_list):
         list.append(dept) 
 
         discount = '0.00'
-        donor_premium = ''
         exclude_discounting = ''
         free_shipping = ''
         gift_card = ''
@@ -851,7 +851,8 @@ def order_items(o, order_item_list, env_var_list):
         if 'cru_data' in li:
             cd = li['cru_data']
             discount = cd['discount']
-            donor_premium = cd['donor_premium']
+            if donor_premium == "false":
+                donor_premium = cd['donor_premium']
             exclude_discounting = cd['exclude_discounting']
             free_shipping = cd['free_shipping']
             gift_card = cd['gift_card']
