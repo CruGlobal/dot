@@ -1045,7 +1045,8 @@ def products(p, product_list, env_var_list):
     list.append(impact)
     list.append(product_language)
     list.append(sub_brand)
-    list.append(p['status'])
+    status = str(p['status'])
+    list.append(status.title())
     list.append(Decimal(str(alg_wc_cog_cost))) 
     list.append(Decimal(str(fl_staff_price_field))) 
 
