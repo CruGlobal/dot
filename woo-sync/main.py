@@ -716,19 +716,18 @@ def orders(o, order_list, env_var_list):
     list.append(o['date_paid'])
     list.append(o['cru_data']['shipping']['date_shipped']) 
 
-    dscount_amount = 0
+    discount_amount = 0
     discount_code = ''
     discount_type = ''
     discount_description = ''
     cd = o['cru_data']
-    for x in cd['discounts']:
-        if Decimal(x['amount']) > 0:
-            dscount_amount = x['amount']
-            discount_code = x['code']
-            discount_type = x['type']
-            discount_description = x['description']
+    for x in reversed(cd['discounts']):
+        discount_amount = x['amount']
+        discount_code = x['code']
+        discount_type = x['type']
+        discount_description = x['description']
 
-    list.append(Decimal(str(dscount_amount)))
+    list.append(Decimal(str(discount_amount)))
     list.append(discount_code)
     list.append(discount_type)  
     list.append(discount_description) 
@@ -793,7 +792,11 @@ def order_items(o, order_item_list, env_var_list):
     This function loops through an order's line_items and pulls out needed info
     """
     donor_premium = 'false'
+    sku = ''
     for li in o['line_items']:
+
+        if li['bundled_by'] == "":
+            sku = li['sku']
         
         list = []
         list.append(int(env_var_list["store_wid"]))
@@ -890,7 +893,7 @@ def order_items(o, order_item_list, env_var_list):
         list.append(li['quantity'])
         list.append(Decimal(str(regular_price)))
         list.append(royalty)
-        list.append(li['sku'])
+        list.append(sku)
 
         sub_brand = ''
         if 'sub_brand' in li:
@@ -1145,15 +1148,15 @@ def refunds(r, refund_list, env_var_list):
     list.append(env_var_list["rls_value"])
     list.append(r['id'])
     list.append(env_var_list["sync_timestamp"])
+    
     agent_email = ''
     agent_name = ''
-    if 'agent' in r['cru_data']:
-        cda = r['cru_data']['agent']
-        agent_email = cda['email']        
-        agent_name = cda['name']            
+    if 'cru_data' in r:
+        cd = r['cru_data']
+        agent_email = cd['agent_email']        
+        agent_name = cd['agent_name']            
     list.append(agent_email)
-    list.append(agent_name)   
-
+    list.append(agent_name)
 
     list.append(r['date_created'])       
     list.append(r['date_created']) #date_modified
