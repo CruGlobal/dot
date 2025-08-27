@@ -834,9 +834,11 @@ def order_items(o, order_item_list, env_var_list):
         for y in li['meta_data']:
             if y['key'] == "_alg_wc_cog_item_cost":
                 cost = y['value'] 
-        if not isinstance(cost, (int, float)):
-            cost = 0         
-        list.append(Decimal(str(cost)))
+        try:
+            cost = Decimal(str(cost))
+        except Exception as e:
+            cost = 0
+        list.append(cost)
        
         dept = ''
         if 'dept' in li:
@@ -1184,7 +1186,8 @@ def refunds(r, refund_list, env_var_list):
 
     list.append(int(time.time()))
 
-    list.append(Decimal(str(r['amount']))) 
+    amount = Decimal(str(r['amount']))
+    list.append(-amount) 
 
     refund_list.append(list)
 
@@ -1214,12 +1217,16 @@ def refund_items(r, refund_item_list, env_var_list):
             if y['key'] == "_alg_wc_cog_item_cost":
                 product_component_cost = y['value']
                 product_cost = y['value']
-        if not isinstance(product_component_cost, (int, float)):
-            product_component_cost = 0  
-        if not isinstance(product_cost, (int, float)):
-            product_cost = 0             
-        list.append(Decimal(str(product_component_cost)))               
-        list.append(Decimal(str(product_cost)))
+        try:
+            product_component_cost = Decimal(str(product_component_cost))
+        except Exception as e:
+            product_component_cost = 0
+        try:
+            product_cost = Decimal(str(product_cost))
+        except Exception as e:
+            product_cost = 0                        
+        list.append(product_component_cost)            
+        list.append(product_cost)
 
         list.append(li['product_id'])
         list.append(li['name'])
