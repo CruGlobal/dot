@@ -274,7 +274,6 @@ def get_last_load_date_time(obj):
     """
     logger = logging.getLogger("primary_logger")
     query = obj
-    #client = bigquery.Client(project='cru-data-orchestration-poc')
     client = bigquery.Client(project=bq_client_project)
 
     try:
