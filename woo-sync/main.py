@@ -15,6 +15,7 @@ from google.cloud import bigquery
 from decimal import Decimal, getcontext
 from collections import Counter
 
+bq_client_project = os.environ.get("BIGQUERY_CLIENT_PROJECT_NAME", None)
 project_name = os.environ.get("BIGQUERY_PROJECT_NAME", None)
 dataset_name = os.environ.get("BIGQUERY_DATASET_NAME", None)
 client = BigQueryClient(project=project_name)
@@ -273,7 +274,8 @@ def get_last_load_date_time(obj):
     """
     logger = logging.getLogger("primary_logger")
     query = obj
-    client = bigquery.Client(project='cru-data-orchestration-poc')
+    #client = bigquery.Client(project='cru-data-orchestration-poc')
+    client = bigquery.Client(project=bq_client_project)
 
     try:
         query_job = client.query(query)
