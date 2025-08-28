@@ -37,169 +37,43 @@ GET_FL_LAST_LOAD_ORDERS= """
     order by sync_timestamp desc 
     limit 1
 """
+logger = logging.getLogger("primary_logger")
+logger.propagate = False
 
 ## SCRIPT UTILITIES -------------------------------------------------------------------------------------------------------------------------------------------
-class SingletonConfig:
+class CloudLoggingFormatter(logging.Formatter):
     """
-    A singleton class that provides global configuration settings for the application.
-
-    Attributes:
-        _instance (SingletonConfig): The singleton instance of the class.
-        _folder_path (str): The path to the log folder.
-        _project_id (str): The ID of the BigQuery project.
-        _dataset_id (str): The ID of the temporary dataset in BigQuery.
-        _target_dataset_id (str): The ID of the target dataset in BigQuery.
+    Produces messages compatible with google cloud logging
     """
 
-    _instance = None
-    _folder_path = None
-    _project_id = None
-    _dataset_id = None
-    _target_dataset_id = None
+    def format(self, record: logging.LogRecord) -> str:
+        s = super().format(record)
+        return json.dumps(
+            {
+                "message": s,
+                "severity": record.levelname,
+                "timestamp": {"seconds": int(record.created), "nanos": 0},
+            }
+        )
 
-    def __new__(cls):
-        """
-        Creates a new instance of the SingletonConfig class if one does not already exist.
-
-        Returns:
-            SingletonConfig: The singleton instance of the class.
-        """
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._folder_path = None
-            cls._instance._project_id = "cru-data-warehouse-elt-prod"
-            cls._instance._dataset_id = "temp_okta"
-            cls._instance._target_dataset_id = "el_okta"
-        return cls._instance
-
-    def create_log_folder(self):
-        """
-        Creates a log folder with the starting date as the folder name.
-        """
-        if self._folder_path is None:
-            current_folder = os.path.dirname(os.path.abspath(__file__))
-            sub_folder = datetime.now().strftime("%Y-%m-%d")
-            self._folder_path = os.path.join(current_folder, sub_folder)
-            os.makedirs(self._folder_path, exist_ok=True)
-
-    @property
-    def log_path(self) -> str:
-        """
-        Returns the path to the log folder.
-
-        Returns:
-            str: The path to the log folder.
-
-        Raises:
-            ValueError: If the folder path has not been created yet.
-        """
-        if self._folder_path is not None:
-            return self._folder_path
-        else:
-            raise ValueError("Folder path has not been created yet")
-
-    @property
-    def project_id(self) -> str:
-        """
-        Returns the project_id of the BigQuery project.
-
-        Returns:
-            str: The project_id of the BigQuery project.
-
-        Raises:
-            ValueError: If the project_id has not been set yet.
-        """
-        if self._project_id is not None:
-            return self._project_id
-        else:
-            raise ValueError("Project ID has not been set yet")
-
-    @property
-    def dataset_id(self) -> str:
-        """
-        Returns the project_id of the temp dataset in BigQuery.
-
-        Returns:
-            str: The project_id of the temp dataset in BigQuery.
-
-        Raises:
-            ValueError: If the temp project_id has not been set yet.
-        """
-        if self._dataset_id is not None:
-            return self._dataset_id
-        else:
-            raise ValueError("Dataset ID has not been set yet")
-
-    @property
-    def target_dataset_id(self) -> str:
-        """
-        Returns the project_id of the target dataset in BigQuery.
-
-        Returns:
-            str: The project_id of the target dataset in BigQuery.
-
-        Raises:
-            ValueError: If the target project_id has not been set yet.
-        """
-        if self._target_dataset_id is not None:
-            return self._target_dataset_id
-        else:
-            raise ValueError("Target Dataset ID has not been set yet")
-
-def setup_logging() -> None:
+def setup_logging():
     """
     Sets up logging for the application.
-
-    This function creates a log folder with the starting date as the folder name, and sets up two logging handlers:
-    one that writes log messages to a file in the log folder,
-    and another that writes log messages to the console/stdout which will end up in Cloud Run Logs.
-    The log messages are formatted as JSON objects with the following keys:
-    - asctime: The time the log message was created, in UTC.
-    - status: The logging level (levelname) of the message (e.g., INFO, WARNING, ERROR).
-    - message: The log message itself.
-
-    Raises:
-        ValueError: If the log folder path has not been created yet.
     """
-    ci = SingletonConfig()
-    ci.create_log_folder()
-    file_name = "output.log"
-    logfile = os.path.join(ci.log_path, file_name)
-    json_formatter = jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(message)s")
-    file_handler = logging.FileHandler(logfile)
-    console_handler = logging.StreamHandler(stream=sys.stdout)
-    file_handler.setLevel(logging.INFO)
-    console_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(json_formatter)
-    console_handler.setFormatter(json_formatter)
-    logger = logging.getLogger("primary_logger")
-    logger.setLevel(logging.INFO)
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-    # Set the custom excepthook function to handle unhandled exceptions
+    global logger
+
+    # Remove any existing handlers
+    if logger.handlers:
+        for handler in logger.handlers:
+            logger.removeHandler(handler)
+
+    handler = logging.StreamHandler(stream=sys.stdout)
+    formatter = CloudLoggingFormatter(fmt="%(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+
     sys.excepthook = handle_unhandled_exception
-
-def log_memory_usage(checkpoint: str = ""):
-    """
-    Logs current memory usage for monitoring and debugging.
-
-    Args:
-        checkpoint (str): Description of where this is being called from
-    """
-    logger = logging.getLogger("primary_logger")
-    try:
-        memory = psutil.virtual_memory()
-        process = psutil.Process()
-        process_memory = process.memory_info()
-
-        logger.info(
-            f"Memory Usage {checkpoint}: "
-            f"System: {memory.used / 1024**3:.2f}GB / {memory.total / 1024**3:.2f}GB "
-            f"({memory.percent:.1f}%) | "
-            f"Process: {process_memory.rss / 1024**3:.2f}GB"
-        )
-    except Exception as e:
-        logger.warning(f"Failed to get memory usage: {str(e)}")
 
 def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
     """
@@ -219,7 +93,8 @@ def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
     # Log the unhandled exception
-    logger = logging.getLogger("primary_logger")
+    #logger = logging.getLogger("primary_logger")
+    setup_logging()
     logger.exception(
         "Unhandled exception", exc_info=(exc_type, exc_value, exc_traceback)
     )
@@ -253,7 +128,8 @@ def load_to_dataframe(
     """
     This function loads the dataframe
     """
-    logger = logging.getLogger("primary_logger")
+    #logger = logging.getLogger("primary_logger")
+    setup_logging()
     try:
         dtype_mapping = get_dtype_mapping()
         dtypes = create_dtype_dict(schema, dtype_mapping)
@@ -272,7 +148,8 @@ def get_last_load_date_time(obj):
     """
     This function gets the latest sync_timestamp value from the specified table
     """
-    logger = logging.getLogger("primary_logger")
+    #logger = logging.getLogger("primary_logger")
+    setup_logging()
     query = obj
     client = bigquery.Client(project=bq_client_project)
 
@@ -295,7 +172,8 @@ def process_orders(list):
     """
     This function builds and uploads an orders dataframe
     """
-    logger = logging.getLogger("primary_logger")
+    #logger = logging.getLogger("primary_logger")
+    setup_logging()
     table_name = "woo_api_orders"
     data = list
     schema = [
@@ -397,7 +275,8 @@ def process_order_items(list):
     """
     This function builds and uploads an order_items dataframe
     """
-    logger = logging.getLogger("primary_logger")
+    #logger = logging.getLogger("primary_logger")
+    setup_logging()
     table_name = "woo_api_order_items"
     data = list
     schema = [
@@ -458,7 +337,8 @@ def process_products(list):
     """
     This function builds and uploads a products dataframe
     """
-    logger = logging.getLogger("primary_logger")
+    #logger = logging.getLogger("primary_logger")
+    setup_logging()
     table_name = "woo_api_products"
     data = list
     schema = [
@@ -520,7 +400,8 @@ def process_product_bundles(list):
     """
     This function builds and uploads a product_bundles dataframe
     """
-    logger = logging.getLogger("primary_logger")
+    #logger = logging.getLogger("primary_logger")
+    setup_logging()
     table_name = "woo_api_product_bundles"
     data = list
     schema = [
@@ -548,7 +429,8 @@ def process_product_categories(list):
     """
     This function builds and uploads a product_categories dataframe
     """
-    logger = logging.getLogger("primary_logger")
+    #logger = logging.getLogger("primary_logger")
+    setup_logging()
     table_name = "woo_api_product_categories"
     data = list
     schema = [
@@ -576,7 +458,8 @@ def process_product_attributes(list):
     """
     This function builds and uploads a product_attributes dataframe
     """
-    logger = logging.getLogger("primary_logger")
+    #logger = logging.getLogger("primary_logger")
+    setup_logging()
     table_name = "woo_api_product_attributes"
     data = list
     schema = [
@@ -605,7 +488,8 @@ def process_refunds(list):
     """
     This function builds and uploads a refund dataframe
     """
-    logger = logging.getLogger("primary_logger")
+    #logger = logging.getLogger("primary_logger")
+    setup_logging()
     table_name = "woo_api_refunds"
     data = list
     schema = [
@@ -644,7 +528,8 @@ def process_refund_items(list):
     """
     This function builds and uploads a refund_items dataframe
     """
-    logger = logging.getLogger("primary_logger")
+    #logger = logging.getLogger("primary_logger")
+    setup_logging()
     table_name = "woo_api_refund_items"
     data = list
     schema = [
@@ -1245,7 +1130,8 @@ def get_orders_and_items(env_var_list):
     """
     This function is called from trigger_sync.  It queries the WooCommerce API for NEW orders and order_items
     """
-    logger = logging.getLogger("primary_logger")
+    #logger = logging.getLogger("primary_logger")
+    setup_logging()
     last_update_date_time = env_var_list["order_last_update_date_time"]
     logger.info(last_update_date_time)
     url = env_var_list["orders_api_url"]
@@ -1286,7 +1172,8 @@ def get_products_and_bundles(env_var_list):
     """
     This function is called from trigger_sync.  It queries the WooCommerce API for ALL prducts, bundles, categories, and attributes
     """
-    logger = logging.getLogger("primary_logger")
+    #logger = logging.getLogger("primary_logger")
+    setup_logging()
     url = env_var_list["products_api_url"]
 
     headers = {
@@ -1336,7 +1223,6 @@ def get_refunds_and_items(env_var_list):
     """
     This function is called from trigger_sync.  It queries the WooCommerce API for ALL refunds and refund_items
     """
-    logger = logging.getLogger("primary_logger")
     url = env_var_list["refunds_api_url"]
 
     headers = {
@@ -1377,10 +1263,9 @@ def trigger_sync():
     Main entry point for Cloud Run Jobs.
     This function will be called when the job is triggered.
     """
-    logger = logging.getLogger("primary_logger")
+    setup_logging()
+    #logger = logging.getLogger("primary_logger")
     logger.info("Starting Woo API data synchronization job")
-
-    log_memory_usage("- Job Start")
 
     try:
         sync_timestamp = str(datetime.now(timezone.utc))
