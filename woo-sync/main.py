@@ -93,7 +93,6 @@ def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
     # Log the unhandled exception
-    #logger = logging.getLogger("primary_logger")
     setup_logging()
     logger.exception(
         "Unhandled exception", exc_info=(exc_type, exc_value, exc_traceback)
@@ -128,7 +127,6 @@ def load_to_dataframe(
     """
     This function loads the dataframe
     """
-    #logger = logging.getLogger("primary_logger")
     setup_logging()
     try:
         dtype_mapping = get_dtype_mapping()
@@ -148,7 +146,6 @@ def get_last_load_date_time(obj):
     """
     This function gets the latest sync_timestamp value from the specified table
     """
-    #logger = logging.getLogger("primary_logger")
     setup_logging()
     query = obj
     client = bigquery.Client(project=bq_client_project)
@@ -172,7 +169,6 @@ def process_orders(list):
     """
     This function builds and uploads an orders dataframe
     """
-    #logger = logging.getLogger("primary_logger")
     setup_logging()
     table_name = "woo_api_orders"
     data = list
@@ -275,7 +271,6 @@ def process_order_items(list):
     """
     This function builds and uploads an order_items dataframe
     """
-    #logger = logging.getLogger("primary_logger")
     setup_logging()
     table_name = "woo_api_order_items"
     data = list
@@ -337,7 +332,6 @@ def process_products(list):
     """
     This function builds and uploads a products dataframe
     """
-    #logger = logging.getLogger("primary_logger")
     setup_logging()
     table_name = "woo_api_products"
     data = list
@@ -400,7 +394,6 @@ def process_product_bundles(list):
     """
     This function builds and uploads a product_bundles dataframe
     """
-    #logger = logging.getLogger("primary_logger")
     setup_logging()
     table_name = "woo_api_product_bundles"
     data = list
@@ -429,7 +422,6 @@ def process_product_categories(list):
     """
     This function builds and uploads a product_categories dataframe
     """
-    #logger = logging.getLogger("primary_logger")
     setup_logging()
     table_name = "woo_api_product_categories"
     data = list
@@ -458,7 +450,6 @@ def process_product_attributes(list):
     """
     This function builds and uploads a product_attributes dataframe
     """
-    #logger = logging.getLogger("primary_logger")
     setup_logging()
     table_name = "woo_api_product_attributes"
     data = list
@@ -488,7 +479,6 @@ def process_refunds(list):
     """
     This function builds and uploads a refund dataframe
     """
-    #logger = logging.getLogger("primary_logger")
     setup_logging()
     table_name = "woo_api_refunds"
     data = list
@@ -528,7 +518,6 @@ def process_refund_items(list):
     """
     This function builds and uploads a refund_items dataframe
     """
-    #logger = logging.getLogger("primary_logger")
     setup_logging()
     table_name = "woo_api_refund_items"
     data = list
@@ -1130,7 +1119,6 @@ def get_orders_and_items(env_var_list):
     """
     This function is called from trigger_sync.  It queries the WooCommerce API for NEW orders and order_items
     """
-    #logger = logging.getLogger("primary_logger")
     setup_logging()
     last_update_date_time = env_var_list["order_last_update_date_time"]
     logger.info(last_update_date_time)
@@ -1172,7 +1160,6 @@ def get_products_and_bundles(env_var_list):
     """
     This function is called from trigger_sync.  It queries the WooCommerce API for ALL prducts, bundles, categories, and attributes
     """
-    #logger = logging.getLogger("primary_logger")
     setup_logging()
     url = env_var_list["products_api_url"]
 
@@ -1264,7 +1251,6 @@ def trigger_sync():
     This function will be called when the job is triggered.
     """
     setup_logging()
-    #logger = logging.getLogger("primary_logger")
     logger.info("Starting Woo API data synchronization job")
 
     try:
