@@ -37,6 +37,7 @@ GET_FL_LAST_LOAD_ORDERS= """
     order by sync_timestamp desc 
     limit 1
 """
+
 logger = logging.getLogger("primary_logger")
 logger.propagate = False
 
