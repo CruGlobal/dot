@@ -1,3 +1,4 @@
+
 module "dbt-triggers" {
   source      = "git::https://github.com/CruGlobal/cru-terraform-modules.git//gcp/cloudrun-function/scheduled-tasks?ref=v30.14.4"
   name        = "dbt-trigger"
