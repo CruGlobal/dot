@@ -1257,31 +1257,6 @@ def trigger_sync():
     try:
         sync_timestamp = str(datetime.now(timezone.utc))
         
-        # CRU Store --------------------------------
-        cru_order_last_update_date_time = get_last_load_date_time(GET_CRU_LAST_LOAD_ORDERS)
-        env_var_dict_cru = {
-            "sync_timestamp": sync_timestamp,
-            "order_last_update_date_time": cru_order_last_update_date_time,
-            "store_wid": os.getenv("CRU_STORE_WID", None),
-            "rls_value": os.environ.get("CRU_RLS_VALUE", None),
-            "woo_api_client_id": os.environ.get("API_CLIENT_ID", None),
-            "woo_api_client_secret": os.environ.get("API_CLIENT_SECRET", None),
-            "orders_api_url": os.environ.get("CRU_API_ORDERS", None),
-            "products_api_url": os.environ.get("CRU_API_PRODUCTS", None),
-            "refunds_api_url": os.environ.get("CRU_API_REFUNDS", None),
-        }
-        env_var_string = json.dumps(env_var_dict_cru)
-        env_var_list = json.loads(env_var_string)
-
-        logger.info("BEGIN - CRU order sync")    
-        get_orders_and_items(env_var_list)
-
-        logger.info("BEGIN - CRU refund sync")    
-        get_refunds_and_items(env_var_list)
-
-        logger.info("BEGIN - CRU product sync")    
-        get_products_and_bundles(env_var_list)
-        
         # FamilyLife Store --------------------------------
         fl_order_last_update_date_time = get_last_load_date_time(GET_FL_LAST_LOAD_ORDERS)
         env_var_dict_fl = {
@@ -1295,17 +1270,44 @@ def trigger_sync():
             "products_api_url": os.environ.get("FL_API_PRODUCTS", None),
             "refunds_api_url": os.environ.get("FL_API_REFUNDS", None),
         }
-        env_var_string = json.dumps(env_var_dict_fl)
-        env_var_list = json.loads(env_var_string)
+
+        # CRU Store --------------------------------
+        cru_order_last_update_date_time = get_last_load_date_time(GET_CRU_LAST_LOAD_ORDERS)
+        env_var_dict_cru = {
+            "sync_timestamp": sync_timestamp,
+            "order_last_update_date_time": cru_order_last_update_date_time,
+            "store_wid": os.getenv("CRU_STORE_WID", None),
+            "rls_value": os.environ.get("CRU_RLS_VALUE", None),
+            "woo_api_client_id": os.environ.get("API_CLIENT_ID", None),
+            "woo_api_client_secret": os.environ.get("API_CLIENT_SECRET", None),
+            "orders_api_url": os.environ.get("CRU_API_ORDERS", None),
+            "products_api_url": os.environ.get("CRU_API_PRODUCTS", None),
+            "refunds_api_url": os.environ.get("CRU_API_REFUNDS", None),
+        }
+        
+        env_var_string_fl = json.dumps(env_var_dict_fl)
+        env_var_string_cru = json.dumps(env_var_dict_cru)
+
+        env_var_list_fl = json.loads(env_var_string_fl)
+        env_var_list_cru = json.loads(env_var_string_cru)
     
         logger.info("BEGIN - FamilyLife order sync")  
-        get_orders_and_items(env_var_list)
+        get_orders_and_items(env_var_list_fl)
+
+        logger.info("BEGIN - CRU order sync")    
+        get_orders_and_items(env_var_list_cru)
 
         logger.info("BEGIN - FamilyLife refund sync")  
-        get_refunds_and_items(env_var_list)
-        
+        get_refunds_and_items(env_var_list_fl)
+
+        logger.info("BEGIN - CRU refund sync")    
+        get_refunds_and_items(env_var_list_cru)
+
         logger.info("BEGIN - FamilyLife product sync")  
-        get_products_and_bundles(env_var_list)
+        get_products_and_bundles(env_var_list_fl)
+
+        logger.info("BEGIN - CRU product sync")    
+        get_products_and_bundles(env_var_list_cru)
 
     except Exception as e:
         logger.exception(f"Error processing WooCommerce Api: {str(e)}")
