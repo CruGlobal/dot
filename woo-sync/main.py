@@ -1256,7 +1256,7 @@ def trigger_sync():
 
     try:
         sync_timestamp = str(datetime.now(timezone.utc))
-        
+
         # FamilyLife Store --------------------------------
         fl_order_last_update_date_time = get_last_load_date_time(GET_FL_LAST_LOAD_ORDERS)
         env_var_dict_fl = {
@@ -1270,6 +1270,17 @@ def trigger_sync():
             "products_api_url": os.environ.get("FL_API_PRODUCTS", None),
             "refunds_api_url": os.environ.get("FL_API_REFUNDS", None),
         }
+        env_var_string = json.dumps(env_var_dict_fl)
+        env_var_list = json.loads(env_var_string)
+    
+        logger.info("BEGIN - FamilyLife order sync")  
+        get_orders_and_items(env_var_list)
+
+        logger.info("BEGIN - FamilyLife refund sync")  
+        get_refunds_and_items(env_var_list)
+        
+        logger.info("BEGIN - FamilyLife product sync")  
+        get_products_and_bundles(env_var_list)
         
         # CRU Store --------------------------------
         cru_order_last_update_date_time = get_last_load_date_time(GET_CRU_LAST_LOAD_ORDERS)
@@ -1284,31 +1295,17 @@ def trigger_sync():
             "products_api_url": os.environ.get("CRU_API_PRODUCTS", None),
             "refunds_api_url": os.environ.get("CRU_API_REFUNDS", None),
         }
+        env_var_string = json.dumps(env_var_dict_cru)
+        env_var_list = json.loads(env_var_string)
 
-        env_var_string_fl = json.dumps(env_var_dict_fl)
-        env_var_string_cru = json.dumps(env_var_dict_cru)
-
-        env_var_list_fl = json.loads(env_var_string_fl)
-        env_var_list_cru = json.loads(env_var_string_cru)
-        
-        
-        logger.info("BEGIN - FamilyLife order sync")  
-        get_orders_and_items(env_var_list_fl)
-        
         logger.info("BEGIN - CRU order sync")    
-        get_orders_and_items(env_var_list_cru)
-
-        logger.info("BEGIN - FamilyLife refund sync")  
-        get_refunds_and_items(env_var_list_fl)
+        get_orders_and_items(env_var_list)
 
         logger.info("BEGIN - CRU refund sync")    
-        get_refunds_and_items(env_var_list_cru)
-        
-        logger.info("BEGIN - FamilyLife product sync")  
-        get_products_and_bundles(env_var_list_fl)
+        get_refunds_and_items(env_var_list)
 
         logger.info("BEGIN - CRU product sync")    
-        get_products_and_bundles(env_var_list_cru)
+        get_products_and_bundles(env_var_list)
 
     except Exception as e:
         logger.exception(f"Error processing WooCommerce Api: {str(e)}")
