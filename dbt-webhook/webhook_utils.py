@@ -24,13 +24,22 @@ def verify_dbt_signature(request_body: bytes, signature: str, secret: str) -> bo
 
     try:
         # DBT sends the signature directly in Authorization header
-        # Compute expected signature  
+        # Compute expected signature following DBT documentation pattern
         computed_hmac = hmac.new(
             secret.encode("utf-8"), request_body, hashlib.sha256
         ).hexdigest()
 
-        # Compare signatures safely - DBT sends raw hex signature
-        return hmac.compare_digest(computed_hmac, signature)
+        # Debug logging for signature verification
+        logger.debug(f"Request body length: {len(request_body)}")
+        logger.debug(f"Request body preview: {request_body[:100]}")
+        logger.debug(f"Received signature: {signature}")
+        logger.debug(f"Computed signature: {computed_hmac}")
+
+        # Compare signatures using DBT documentation pattern
+        signature_valid = computed_hmac == signature
+        logger.debug(f"Signature validation result: {signature_valid}")
+        
+        return signature_valid
 
     except Exception as e:
         logger.exception(f"Error verifying DBT webhook signature: {str(e)}")

@@ -111,7 +111,7 @@ def webhook_handler(request):
     try:
         # Get request data and signature
         request_body = request.get_data()
-        signature = request.headers.get("Authorization")
+        signature = request.headers.get("authorization")
 
         if not signature:
             logger.warning("Missing DBT signature header")
