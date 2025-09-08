@@ -14,11 +14,14 @@ from typing import Tuple, List, Dict, Any
 from google.cloud import bigquery
 from decimal import Decimal, getcontext
 from collections import Counter
+from google.cloud import pubsub_v1
 
-bq_client_project = os.environ.get("BIGQUERY_CLIENT_PROJECT_NAME", None)
+#bq_client_project = os.environ.get("BIGQUERY_CLIENT_PROJECT_NAME", None)
 project_name = os.environ.get("BIGQUERY_PROJECT_NAME", None)
 dataset_name = os.environ.get("BIGQUERY_DATASET_NAME", None)
+google_cloud_project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", None)
 client = BigQueryClient(project=project_name)
+dbt_job_number = "84393"
 
 GET_CRU_LAST_LOAD_ORDERS= """
     select sync_timestamp 
@@ -121,6 +124,15 @@ def create_dtype_dict(schema: list, dtype_mapping: Dict[str, str]) -> Dict[int, 
     """Create a dictionary mapping column indices to their data types."""
     return {i: dtype_mapping[col_type] for i, (_, col_type) in enumerate(schema)}
 
+def publish_pubsub_message(data: Dict[str, Any], topic_name: str) -> None:
+    """Publishes a message to a Pub/Sub topic."""
+    publisher = pubsub_v1.PublisherClient()
+    topic_path = publisher.topic_path(google_cloud_project_id, topic_name)
+    data = json.dumps(data).encode("utf-8")
+    future = publisher.publish(topic_path, data)
+    future.result()
+    logger.info(f"Published message to Pub/Sub topic '{topic_name}'.")
+
 def load_to_dataframe(
     data: list,
     schema: list,
@@ -150,7 +162,7 @@ def get_last_load_date_time(obj):
     """
     setup_logging()
     query = obj
-    client = bigquery.Client(project=bq_client_project)
+    client = bigquery.Client(project=google_cloud_project_id)
 
     try:
         query_job = client.query(query)
@@ -1309,6 +1321,11 @@ def trigger_sync():
 
         logger.info("BEGIN - CRU product sync")    
         get_products_and_bundles(env_var_list_cru)
+
+        publish_pubsub_message(
+            {"job_id": dbt_job_number},
+            "cloud-run-job-completed",
+        )
 
     except Exception as e:
         logger.exception(f"Error processing WooCommerce Api: {str(e)}")
