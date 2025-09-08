@@ -24,15 +24,10 @@ def verify_dbt_signature(request_body: bytes, signature: str, secret: str) -> bo
         return False
 
     try:
-        # Debug logging for signature verification
-        logger.debug(f"Request body length: {len(request_body)}")
-        logger.debug(f"Request body preview: {request_body[:100]}")
-        logger.debug(f"Received authorization: {signature[:50]}...")
-
         # DBT Cloud sends JWT Bearer tokens, not HMAC signatures
         # For now, accept any Bearer token (DBT handles authentication)
         if signature.startswith("Bearer "):
-            logger.debug("Valid JWT Bearer token received from DBT Cloud")
+            logger.info("Valid JWT Bearer token received from DBT Cloud")
             return True
         
         # Fallback: Try HMAC validation for compatibility

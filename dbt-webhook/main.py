@@ -125,12 +125,14 @@ def webhook_handler(request):
         # Parse request JSON
         try:
             request_json = json.loads(request_body.decode('utf-8'))
+            logger.info(f"DBT webhook payload: {json.dumps(request_json, indent=2)}")
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in request body: {str(e)}")
             return ("Invalid JSON", 400)
 
         # Parse DBT webhook data
         dbt_info = parse_dbt_webhook(request_json)
+        logger.info(f"Parsed DBT info: {dbt_info}")
         if not dbt_info:
             logger.error("Failed to parse DBT webhook payload")
             return ("Invalid DBT webhook payload", 400)
