@@ -111,7 +111,7 @@ def webhook_handler(request):
     try:
         # Get request data and signature
         request_body = request.get_data()
-        signature = request.headers.get("X-DBT-Signature")
+        signature = request.headers.get("Authorization")
 
         if not signature:
             logger.warning("Missing DBT signature header")
@@ -139,8 +139,8 @@ def webhook_handler(request):
 
         # Only process successful job completions
         if (dbt_info.get('event_type') != 'job.run.completed' or 
-            dbt_info.get('run_status') not in ['success', '10']):  # DBT uses both string and numeric status
-            logger.info(f"Ignoring DBT event - not a successful job completion: {dbt_info.get('event_type')}, status: {dbt_info.get('run_status')}")
+            (dbt_info.get('run_status') != 'Success' and dbt_info.get('run_status_code') != 10)):
+            logger.info(f"Ignoring DBT event - not a successful job completion: {dbt_info.get('event_type')}, status: {dbt_info.get('run_status')}, status_code: {dbt_info.get('run_status_code')}")
             return ("Event ignored - not a successful job completion", 200)
 
         # Map DBT job to Fabric configuration

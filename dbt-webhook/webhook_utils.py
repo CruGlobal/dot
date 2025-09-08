@@ -23,16 +23,13 @@ def verify_dbt_signature(request_body: bytes, signature: str, secret: str) -> bo
         return False
 
     try:
-        # Remove 'sha256=' prefix if present
-        if signature.startswith("sha256="):
-            signature = signature[7:]
-
-        # Compute expected signature
+        # DBT sends the signature directly in Authorization header
+        # Compute expected signature  
         computed_hmac = hmac.new(
             secret.encode("utf-8"), request_body, hashlib.sha256
         ).hexdigest()
 
-        # Compare signatures safely
+        # Compare signatures safely - DBT sends raw hex signature
         return hmac.compare_digest(computed_hmac, signature)
 
     except Exception as e:
@@ -66,6 +63,7 @@ def parse_dbt_webhook(payload: dict) -> dict:
                 "job_name": job_data.get("name", ""),
                 "run_id": str(run_data.get("id", "")),
                 "run_status": run_data.get("status", ""),
+                "run_status_code": run_data.get("statusCode", ""),
                 "run_status_humanized": run_data.get("statusHumanized", ""),
                 "environment_id": str(data.get("environmentId", "")),
                 "account_id": str(data.get("accountId", "")),
