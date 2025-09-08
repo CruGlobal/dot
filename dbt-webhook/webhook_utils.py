@@ -62,19 +62,17 @@ def parse_dbt_webhook(payload: dict) -> dict:
 
         # Handle job completion events
         if event_type == "job.run.completed":
-            job_data = data.get("job", {})
-            run_data = data.get("run", {})
-
+            # DBT webhook puts all fields directly in 'data', not nested under 'job'/'run'
             return {
                 "event_type": event_type,
-                "job_id": str(job_data.get("id", "")),
-                "job_name": job_data.get("name", ""),
-                "run_id": str(run_data.get("id", "")),
-                "run_status": run_data.get("status", ""),
-                "run_status_code": run_data.get("statusCode", ""),
-                "run_status_humanized": run_data.get("statusHumanized", ""),
+                "job_id": str(data.get("jobId", "")),
+                "job_name": data.get("jobName", ""),
+                "run_id": str(data.get("runId", "")),
+                "run_status": data.get("runStatus", ""),
+                "run_status_code": data.get("runStatusCode", ""),
+                "run_status_humanized": data.get("runStatusMessage", ""),
                 "environment_id": str(data.get("environmentId", "")),
-                "account_id": str(data.get("accountId", "")),
+                "account_id": str(payload.get("accountId", "")),
             }
 
     except Exception as e:
