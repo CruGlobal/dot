@@ -97,7 +97,8 @@ def create_fabric_job_message(fabric_config: dict, dbt_info: dict) -> dict:
             "dbt_environment_id": dbt_info.get("environment_id", ""),
             "dbt_account_id": dbt_info.get("account_id", ""),
             "event_type": dbt_info.get("event_type", "")
-        }
+        },
+        "execution_data": None
     }
 
 
