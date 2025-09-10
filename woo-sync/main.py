@@ -1310,17 +1310,19 @@ def trigger_sync():
         logger.info("BEGIN - CRU order sync")    
         get_orders_and_items(env_var_list_cru)
 
-        logger.info("BEGIN - FamilyLife refund sync")  
-        get_refunds_and_items(env_var_list_fl)
+        if datetime.now(timezone.utc).hour in [11, 17]:        
 
-        logger.info("BEGIN - CRU refund sync")    
-        get_refunds_and_items(env_var_list_cru)
+            logger.info("BEGIN - FamilyLife refund sync")  
+            get_refunds_and_items(env_var_list_fl)
 
-        logger.info("BEGIN - FamilyLife product sync")  
-        get_products_and_bundles(env_var_list_fl)
+            logger.info("BEGIN - CRU refund sync")    
+            get_refunds_and_items(env_var_list_cru)
 
-        logger.info("BEGIN - CRU product sync")    
-        get_products_and_bundles(env_var_list_cru)
+            logger.info("BEGIN - FamilyLife product sync")  
+            get_products_and_bundles(env_var_list_fl)
+
+            logger.info("BEGIN - CRU product sync")    
+            get_products_and_bundles(env_var_list_cru)
 
         publish_pubsub_message(
             {"job_id": dbt_job_number},
