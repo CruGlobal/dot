@@ -29,15 +29,15 @@ def verify_dbt_signature(request_body: bytes, signature: str, secret: str) -> bo
         if signature.startswith("Bearer "):
             logger.info("Valid JWT Bearer token received from DBT Cloud")
             return True
-        
+
         # Fallback: Try HMAC validation for compatibility
         computed_hmac = hmac.new(
             secret.encode("utf-8"), request_body, hashlib.sha256
         ).hexdigest()
-        
+
         signature_valid = computed_hmac == signature
         logger.debug(f"HMAC signature validation result: {signature_valid}")
-        
+
         return signature_valid
 
     except Exception as e:
@@ -94,16 +94,18 @@ def map_dbt_to_fabric(dbt_job_id: str) -> dict:
     """
     # TODO: Replace with dynamic configuration from database or config file
     dbt_to_fabric_mapping = {
-        # "23366": {
-        #     "workspace_id": "c2bafcfd-df3d-4383-8f76-aed296260453",
-        #     "item_id": "457998b0-be0c-437c-9b1a-4e5f17b3bf77",
-        #     "job_type": "Execute",
-        # },
-        "23366": {
-            "workspace_id": "c264b9e2-3d6e-483e-9898-1daf345ffcef",
-            "item_id": "752c9a6a-7196-4a56-90f2-775fa3d1a965",
+        # "US Donations" to Fabric CopyJob
+        "163545": {
+            "workspace_id": "c2bafcfd-df3d-4383-8f76-aed296260453",
+            "item_id": "457998b0-be0c-437c-9b1a-4e5f17b3bf77",
             "job_type": "Execute",
         }
+        # Testing "On Demand - Utilities" to "Lakehouse Test 2"
+        # "23366": {
+        #     "workspace_id": "c264b9e2-3d6e-483e-9898-1daf345ffcef",
+        #     "item_id": "752c9a6a-7196-4a56-90f2-775fa3d1a965",
+        #     "job_type": "Execute",
+        # }
         # Add more mappings as needed
     }
 
