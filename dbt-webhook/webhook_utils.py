@@ -98,6 +98,8 @@ def map_dbt_to_fabric(dbt_job_id: str) -> dict:
         "163545": {
             "workspace_id": "c2bafcfd-df3d-4383-8f76-aed296260453",
             "item_id": "457998b0-be0c-437c-9b1a-4e5f17b3bf77",
+            "refresh_workspace_id": "b3d68b22-ae01-4017-af31-1392c5c54a6c",
+            "lakehouse_dataset_id": "1402b359-a8e4-48f2-a69e-50bff4e37122",
             "job_type": "Execute",
         }
         # Testing "On Demand - Utilities" to "Lakehouse Test 2"
