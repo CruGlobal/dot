@@ -73,17 +73,19 @@ def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
 def create_fabric_job_message(fabric_config: dict, dbt_info: dict) -> dict:
     """
     Create a generic fabric job request message.
-    
+
     Args:
         fabric_config: Fabric job configuration (workspace_id, item_id, job_type)
         dbt_info: DBT webhook information for context
-        
+
     Returns:
         dict: Generic fabric job request message
     """
     return {
         "workspace_id": fabric_config["workspace_id"],
         "item_id": fabric_config["item_id"],
+        "refresh_workspace_id": fabric_config["refresh_workspace_id"],
+        "lakehouse_dataset_id": fabric_config["lakehouse_dataset_id"],
         "job_type": fabric_config["job_type"],
         "trigger_source": "dbt_completion",
         "enable_monitoring": True,
@@ -96,9 +98,9 @@ def create_fabric_job_message(fabric_config: dict, dbt_info: dict) -> dict:
             "dbt_run_status": dbt_info.get("run_status", ""),
             "dbt_environment_id": dbt_info.get("environment_id", ""),
             "dbt_account_id": dbt_info.get("account_id", ""),
-            "event_type": dbt_info.get("event_type", "")
+            "event_type": dbt_info.get("event_type", ""),
         },
-        "execution_data": None
+        "execution_data": None,
     }
 
 
@@ -108,7 +110,7 @@ def webhook_handler(request):
     HTTP Cloud Function to handle DBT webhook events and trigger Fabric jobs.
     """
     setup_logging()
-    
+
     try:
         # Get request data and signature
         request_body = request.get_data()
@@ -125,7 +127,7 @@ def webhook_handler(request):
 
         # Parse request JSON
         try:
-            request_json = json.loads(request_body.decode('utf-8'))
+            request_json = json.loads(request_body.decode("utf-8"))
             logger.info(f"DBT webhook payload: {json.dumps(request_json, indent=2)}")
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in request body: {str(e)}")
@@ -138,42 +140,58 @@ def webhook_handler(request):
             logger.error("Failed to parse DBT webhook payload")
             return ("Invalid DBT webhook payload", 400)
 
-        logger.info(f"Received DBT webhook: event_type={dbt_info.get('event_type')}, job_id={dbt_info.get('job_id')}, run_status={dbt_info.get('run_status')}")
+        logger.info(
+            f"Received DBT webhook: event_type={dbt_info.get('event_type')}, job_id={dbt_info.get('job_id')}, run_status={dbt_info.get('run_status')}"
+        )
 
         # Only process successful job completions
-        if (dbt_info.get('event_type') != 'job.run.completed' or 
-            (dbt_info.get('run_status') != 'Success' and dbt_info.get('run_status_code') != 10)):
-            logger.info(f"Ignoring DBT event - not a successful job completion: {dbt_info.get('event_type')}, status: {dbt_info.get('run_status')}, status_code: {dbt_info.get('run_status_code')}")
+        if dbt_info.get("event_type") != "job.run.completed" or (
+            dbt_info.get("run_status") != "Success"
+            and dbt_info.get("run_status_code") != 10
+        ):
+            logger.info(
+                f"Ignoring DBT event - not a successful job completion: {dbt_info.get('event_type')}, status: {dbt_info.get('run_status')}, status_code: {dbt_info.get('run_status_code')}"
+            )
             return ("Event ignored - not a successful job completion", 200)
 
         # Map DBT job to Fabric configuration
-        fabric_config = map_dbt_to_fabric(dbt_info.get('job_id', ''))
+        fabric_config = map_dbt_to_fabric(dbt_info.get("job_id", ""))
         if not fabric_config:
-            logger.info(f"No Fabric mapping configured for DBT job ID: {dbt_info.get('job_id')} - webhook processed successfully")
-            return ("Webhook processed - no Fabric job mapping configured for this DBT job", 200)
+            logger.info(
+                f"No Fabric mapping configured for DBT job ID: {dbt_info.get('job_id')} - webhook processed successfully"
+            )
+            return (
+                "Webhook processed - no Fabric job mapping configured for this DBT job",
+                200,
+            )
 
         # Create fabric job request message
         fabric_message = create_fabric_job_message(fabric_config, dbt_info)
-        
+
         # Publish to Pub/Sub
         try:
             message_json = json.dumps(fabric_message)
-            message_bytes = message_json.encode('utf-8')
-            
+            message_bytes = message_json.encode("utf-8")
+
             future = publisher.publish(topic_path, message_bytes)
             message_id = future.result()
-            
-            logger.info(f"Published Fabric job request to Pub/Sub: message_id={message_id}, workspace_id={fabric_config['workspace_id']}, item_id={fabric_config['item_id']}")
-            
-            return ({
-                "status": "success",
-                "message": "Fabric job request published",
-                "message_id": message_id,
-                "dbt_job_id": dbt_info.get('job_id'),
-                "fabric_workspace_id": fabric_config['workspace_id'],
-                "fabric_item_id": fabric_config['item_id']
-            }, 200)
-            
+
+            logger.info(
+                f"Published Fabric job request to Pub/Sub: message_id={message_id}, workspace_id={fabric_config['workspace_id']}, item_id={fabric_config['item_id']}"
+            )
+
+            return (
+                {
+                    "status": "success",
+                    "message": "Fabric job request published",
+                    "message_id": message_id,
+                    "dbt_job_id": dbt_info.get("job_id"),
+                    "fabric_workspace_id": fabric_config["workspace_id"],
+                    "fabric_item_id": fabric_config["item_id"],
+                },
+                200,
+            )
+
         except Exception as e:
             logger.exception(f"Error publishing to Pub/Sub: {str(e)}")
             return (f"Error publishing to Pub/Sub: {str(e)}", 500)
