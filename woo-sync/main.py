@@ -634,7 +634,7 @@ def orders(o, order_list, env_var_list):
 
     list.append(o['order_key'])
 
-    order_origin = ''
+    order_origin = 'WEB'
     for y in o['meta_data']:
         if y['key'] == "cru_order_origin":
             order_origin = y['value']
