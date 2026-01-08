@@ -220,10 +220,84 @@ def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
     )
 
 
+def get_data_batch(
+    endpoint: str,
+    url: str,
+    headers: Dict[str, str],
+    params: Dict[Any, Any],
+    batch_size: int = 10,
+) -> pd.DataFrame:
+    """
+    Retrieves data from the specified Okta API endpoint in batches, yielding DataFrames.
+
+    This function retrieves data from an API endpoint by sending a GET request to the specified URL with the specified
+    headers and parameters. Instead of accumulating all data in memory, it yields batches of data that can be
+    processed incrementally.
+
+    Args:
+        endpoint (str): The name of the API endpoint being queried.
+        url (str): The URL of the API endpoint.
+        headers (Dict[str, str]): A dictionary of headers to include in the GET request.
+        params (Dict[Any, Any]): A dictionary of parameters to include in the GET request.
+        batch_size (int): Number of pages to accumulate before yielding a batch. Default is 10.
+
+    Yields:
+        pd.DataFrame: A pandas DataFrame containing a batch of data retrieved from the API endpoint.
+
+    Raises:
+        ValueError: If the API endpoint returns an error response.
+    """
+    logger = logging.getLogger("primary_logger")
+    page_count = 0
+    batch_dfs = []
+
+    logger.info(f"Downloading {endpoint} page {page_count + 1} from {url}")
+    r = get_request(url, headers, params)
+
+    if not isinstance(r, requests.Response):
+        return
+
+    data = r.json()
+    links = r.links
+    batch_dfs.append(pd.DataFrame(data))
+    page_count += 1
+
+    while "next" in links:
+        url = links["next"]["url"]
+        logger.info(f"Downloading {endpoint} page {page_count + 1} from {url}")
+        params = {None: None}
+        r = get_request(url, headers, params)
+
+        if not isinstance(r, requests.Response):
+            break
+
+        data_next = r.json()
+        links = r.links
+        batch_dfs.append(pd.DataFrame(data_next))
+        page_count += 1
+
+        # Yield batch when we've accumulated enough pages
+        if len(batch_dfs) >= batch_size:
+            batch_df = pd.concat(batch_dfs, axis=0, ignore_index=True)
+            logger.info(f"Yielding batch of {len(batch_df)} records (pages {page_count - len(batch_dfs) + 1}-{page_count})")
+            yield batch_df
+            batch_dfs = []  # Clear memory
+
+    # Yield any remaining data
+    if batch_dfs:
+        batch_df = pd.concat(batch_dfs, axis=0, ignore_index=True)
+        logger.info(f"Yielding final batch of {len(batch_df)} records")
+        yield batch_df
+
+    logger.info(f"All {endpoint} downloaded successfully. Total pages: {page_count}")
+
+
 def get_data(
     endpoint: str, url: str, headers: Dict[str, str], params: Dict[Any, Any]
 ) -> pd.DataFrame:
     """
+    DEPRECATED: Use get_data_batch() for memory-efficient processing.
+
     Retrieves data from the specified Okta API endpoint and returns it as a pandas DataFrame.
 
     This function retrieves data from an API endpoint by sending a GET request to the specified URL with the specified
@@ -269,6 +343,91 @@ def get_data(
         return pd.DataFrame()
 
 
+def get_all_users_batch(
+    endpoint: str,
+    headers: Dict[str, str],
+    params: Dict[Any, Any],
+    ids: List[str],
+    columns: List[str],
+    id_batch_size: int = 10,
+):
+    """
+    Downloads user data for all provided app or group ids in batches, yielding DataFrames.
+
+    This function downloads app users or group members data by looping through all provided app ids or group ids.
+    Instead of accumulating all data in memory, it yields batches of data after processing a certain number of IDs.
+
+    Args:
+        endpoint (str): The Okta API endpoint for the group data.
+        headers (Dict[str, str]): A dictionary of headers to include in the GET request.
+        params (Dict[Any, Any]): A dictionary of parameters to include in the GET request.
+        ids (List[str]): A list of group_ids or app_ids for which to download user data.
+        columns (List[str]): A list of column names to include in the downloaded data.
+        id_batch_size (int): Number of IDs to process before yielding a batch. Default is 10.
+
+    Yields:
+        pd.DataFrame: A pandas DataFrame containing a batch of user data.
+
+    Raises:
+        requests.exceptions.HTTPError: If the server returns an HTTP error status code.
+        requests.exceptions.Timeout: If the request times out.
+        requests.exceptions.ConnectionError: If a connection error occurs while sending the request.
+        requests.exceptions.RequestException: If a general error occurs while sending the request.
+    """
+    logger = logging.getLogger("primary_logger")
+
+    id_count = 0
+    id_count_total = len(ids)
+    batch_dfs = []
+
+    for id in ids:
+        id_count += 1
+        page_count = 1
+        url = f"https://signon.okta.com/api/v1/{endpoint}/{id}/users?"
+        params_copy = params.copy()
+
+        while True:
+            logger.info(
+                f"Downloading {endpoint[:-1]} users for {endpoint[:-1]} {id} ({id_count}/{id_count_total}) on page {page_count} from {url}"
+            )
+            r = get_request(url, headers, params_copy)
+            if isinstance(r, requests.Response):
+                users = r.json()
+                links = r.links
+                for user in users:
+                    user[f"{endpoint[:-1]}_id"] = id
+                df_current = pd.DataFrame(users)
+                df_current = df_current.reindex(columns, axis=1)
+                batch_dfs.append(df_current)
+
+                if "next" in links:
+                    page_count += 1
+                    url = links["next"]["url"]
+                    params_copy = {None: None}
+                else:
+                    break
+            else:
+                break
+
+        # Yield batch after processing id_batch_size IDs
+        if id_count % id_batch_size == 0:
+            batch_df = pd.concat(batch_dfs, axis=0, ignore_index=True)
+            logger.info(
+                f"Yielding batch of {len(batch_df)} records after processing {id_count}/{id_count_total} IDs"
+            )
+            yield batch_df
+            batch_dfs = []  # Clear memory
+            log_memory_usage(f"- After yielding batch for {id_count} IDs")
+
+    # Yield any remaining data
+    if batch_dfs:
+        batch_df = pd.concat(batch_dfs, axis=0, ignore_index=True)
+        logger.info(f"Yielding final batch of {len(batch_df)} records")
+        yield batch_df
+
+    logger.info(f"All {endpoint} users downloaded successfully.")
+
+
 def get_all_users(
     endpoint: str,
     headers: Dict[str, str],
@@ -277,6 +436,8 @@ def get_all_users(
     columns: List[str],
 ) -> pd.DataFrame:
     """
+    DEPRECATED: Use get_all_users_batch() for memory-efficient processing.
+
     Downloads user data for all provided app or group ids.
 
     This function downloads app users or group members data by looping through all provided app ids or group ids.
@@ -610,16 +771,16 @@ def upload_log() -> None:
     upload_to_gcs(file_path, "el_files", blob_name, "CRU_DATA_WAREHOUSE_SANDBOX")
 
 
-def sync_data(endpoint: str) -> None:
+def sync_data(endpoint: str, use_batch_processing: bool = True) -> None:
     """
     Synchronizes apps/users/groups data from Okta to BigQuery.
 
-    This function retrieving data from the specified API endpoint by calling
-    the get_data() function. The function then matches the schema of the downloaded data to the schema of the BigQuery table,
-    writes the data to a CSV file, and uploads the data to the BigQuery table.
+    This function retrieves data from the specified API endpoint and uploads it to BigQuery.
+    When use_batch_processing is True, it processes data in batches to reduce memory consumption.
 
     Args:
         endpoint (str): The API endpoint to synchronize data from (e.g. "apps", "users" or "groups").
+        use_batch_processing (bool): If True, uses batch processing to reduce memory usage. Default is True.
 
     Returns:
         None
@@ -637,26 +798,71 @@ def sync_data(endpoint: str) -> None:
         "Content-Type": "application/json",
     }
     params = {"limit": 200}
-    logger.info(f"Starting to download okta_{endpoint}...")
-    df = get_data(endpoint, url, headers, params)
+    table_id = f"okta_{endpoint}"
+    schema_json = get_schema(table_id)
+
+    if schema_json is None:
+        logger.error(
+            f"Schema for {table_id} not found. Skip uploading to BigQuery."
+        )
+        return
+
+    if not use_batch_processing:
+        # Original implementation for backward compatibility
+        logger.info(f"Starting to download okta_{endpoint}...")
+        df = get_data(endpoint, url, headers, params)
+        if endpoint == "users":
+            params = {"limit": 200, "search": 'status eq "DEPROVISIONED"'}
+            logger.info(f"Starting to download okta_{endpoint} deprovisioned...")
+            df_deprovisioned = get_data(endpoint, url, headers, params)
+            df = pd.concat([df, df_deprovisioned], axis=0, ignore_index=True)
+            logger.info(f"Deprovisioned users added to okta_{endpoint}")
+        df = match_schema(df, schema_json)
+        df = df.drop_duplicates()
+        write_to_csv(df, table_id)
+        try:
+            upload_dataframe_to_bigquery(
+                project_id,
+                dataset_id,
+                table_id,
+                "CRU_DATA_WAREHOUSE_ELT_PROD",
+                df,
+                schema_json,
+            )
+        except Exception as e:
+            logger.exception(f"Upload {table_id} to BigQuery failed: {str(e)}")
+        return
+
+    # Batch processing implementation
+    logger.info(f"Starting to download okta_{endpoint} using batch processing...")
+    batch_count = 0
+    all_batches = []
+
+    # First, process the main endpoint
+    for batch_df in get_data_batch(endpoint, url, headers, params, batch_size=10):
+        batch_count += 1
+        all_batches.append(batch_df)
+        logger.info(f"Processed batch {batch_count} with {len(batch_df)} records")
+
+    # For users endpoint, also fetch deprovisioned users
     if endpoint == "users":
         params = {"limit": 200, "search": 'status eq "DEPROVISIONED"'}
         logger.info(f"Starting to download okta_{endpoint} deprovisioned...")
-        df_deprovisioned = get_data(endpoint, url, headers, params)
-        df = pd.concat([df, df_deprovisioned], axis=0, ignore_index=True)
+        for batch_df in get_data_batch(endpoint, url, headers, params, batch_size=10):
+            batch_count += 1
+            all_batches.append(batch_df)
+            logger.info(f"Processed deprovisioned batch {batch_count} with {len(batch_df)} records")
         logger.info(f"Deprovisioned users added to okta_{endpoint}")
-    table_id = f"okta_{endpoint}"
-    schema_json = get_schema(table_id)
-    if schema_json is None:
-        logger.error(
-            f"Schema for {table_id} not found. Skip uploading to BigQuery. Write to csv only."
-        )
-        df = df.drop_duplicates()
-        write_to_csv(df, table_id)
-        return
+
+    # Combine all batches, apply schema, deduplicate, and upload
+    logger.info(f"Combining {len(all_batches)} batches...")
+    df = pd.concat(all_batches, axis=0, ignore_index=True)
+    log_memory_usage(f"- After combining batches for {endpoint}")
+
     df = match_schema(df, schema_json)
     df = df.drop_duplicates()
     write_to_csv(df, table_id)
+
     try:
         upload_dataframe_to_bigquery(
             project_id,
@@ -666,22 +872,29 @@ def sync_data(endpoint: str) -> None:
             df,
             schema_json,
         )
+        logger.info(f"Successfully uploaded {table_id} to BigQuery")
     except Exception as e:
-        logger.exception(f"Upload {table_id} to BigQuery failed: str(e)")
-        pass
+        logger.exception(f"Upload {table_id} to BigQuery failed: {str(e)}")
+
+    # Clear the dataframe to free memory
+    del df
+    del all_batches
+    log_memory_usage(f"- After uploading {endpoint}")
 
 
-def sync_all_users(endpoint: str) -> None:
+def sync_all_users(endpoint: str, use_batch_processing: bool = True) -> None:
     """
     Synchronizes user data from Okta to Google BigQuery.
 
     This function retrieves all the apps/groups ids from the downloaded data, filters out any excluded ids. The function
-    then download all the users data by calling get_all_users() function to download all users data fro all the app/group ids.
-    Then it matches the schema of the downloaded data to the schema of the BigQuery table, writes the data to a CSV file,
-    and uploads the data to the BigQuery table. Finally, the function updates the excluded user list in BigQuery.
+    then downloads all the users data. When use_batch_processing is True, it processes data in batches to reduce
+    memory consumption. Then it matches the schema of the downloaded data to the schema of the BigQuery table,
+    writes the data to a CSV file, and uploads the data to the BigQuery table. Finally, the function updates
+    the excluded user list in BigQuery.
 
     Args:
         endpoint (str): The endpoint to synchronize user data for (e.g. "group_members" or "app_users").
+        use_batch_processing (bool): If True, uses batch processing to reduce memory usage. Default is True.
 
     Returns:
         None
@@ -692,9 +905,10 @@ def sync_all_users(endpoint: str) -> None:
     logger.info(f"Starting to download {table_id}...")
     schema_json = get_schema(table_id)
     if schema_json is None:
-        logger.error(f"Schema for {table_id} not found. Sync group members failed.")
+        logger.error(f"Schema for {table_id} not found. Sync failed.")
         return
     columns = [field["name"] for field in schema_json]  # type: ignore
+
     # Get all the group ids or app ids from the newly downloaded data
     ci = SingletonConfig()
     project_id = ci.project_id
@@ -702,21 +916,24 @@ def sync_all_users(endpoint: str) -> None:
     folder_path = ci.log_path
     file_path = os.path.join(folder_path, f"okta_{endpoint.split('_')[0]}s.csv")
     df_all = pd.read_csv(file_path)
+
     # Get the existing excluded everyone group ids or app ids
     df_everyone = get_current_everyone_ids_bigquery(
         f"okta_everyone_{endpoint.split('_')[0]}_ids"
     )
-    # Excute query to get the new excluded everyone ids
+    # Execute query to get the new excluded everyone ids
     df_everyone_new = get_new_everyone_ids_bigquery(table_id)
     if df_everyone is None or df_everyone_new is None:
         logger.error(f"Excluded everyone ids not found.")
         return
+
     # Combine the existing and new excluded everyone group ids
     df_everyone = pd.concat([df_everyone, df_everyone_new]).drop_duplicates()
     list_all = df_all["id"].to_list()
     list_everyone = df_everyone["id"].to_list()
     ids = list(set(list_all) - set(list_everyone))
     ids.sort()
+
     token = get_general_credentials("OKTA_TOKEN")
     headers = {
         "Authorization": f"{token}",
@@ -724,23 +941,66 @@ def sync_all_users(endpoint: str) -> None:
         "Content-Type": "application/json",
     }
     params = {"limit": "1000"} if endpoint == "group_members" else {"limit": "500"}
-    # ids = ids[:2]  # for testing
-    df = get_all_users(f"{endpoint.split('_')[0]}s", headers, params, ids, columns)
-    df = match_schema(df, schema_json)
-    df = df.drop_duplicates()
-    write_to_csv(df, table_id)
-    try:
-        upload_dataframe_to_bigquery(
-            project_id,
-            dataset_id,
-            table_id,
-            "CRU_DATA_WAREHOUSE_ELT_PROD",
-            df,
-            schema_json,
-        )
-    except Exception as e:
-        logger.exception(f"Upload {table_id} to BigQuery failed: str(e)")
-        pass
+
+    if not use_batch_processing:
+        # Original implementation for backward compatibility
+        df = get_all_users(f"{endpoint.split('_')[0]}s", headers, params, ids, columns)
+        df = match_schema(df, schema_json)
+        df = df.drop_duplicates()
+        write_to_csv(df, table_id)
+        try:
+            upload_dataframe_to_bigquery(
+                project_id,
+                dataset_id,
+                table_id,
+                "CRU_DATA_WAREHOUSE_ELT_PROD",
+                df,
+                schema_json,
+            )
+        except Exception as e:
+            logger.exception(f"Upload {table_id} to BigQuery failed: {str(e)}")
+    else:
+        # Batch processing implementation
+        logger.info(f"Processing {len(ids)} IDs using batch processing...")
+        all_batches = []
+        batch_count = 0
+
+        # Process in batches and upload incrementally
+        for batch_df in get_all_users_batch(
+            f"{endpoint.split('_')[0]}s", headers, params, ids, columns, id_batch_size=10
+        ):
+            batch_count += 1
+            batch_df = match_schema(batch_df, schema_json)
+            batch_df = batch_df.drop_duplicates()
+            all_batches.append(batch_df)
+            logger.info(f"Processed batch {batch_count} with {len(batch_df)} records")
+            log_memory_usage(f"- After processing batch {batch_count}")
+
+        # Combine all batches for final upload
+        logger.info(f"Combining {len(all_batches)} batches...")
+        df = pd.concat(all_batches, axis=0, ignore_index=True)
+        df = df.drop_duplicates()
+        write_to_csv(df, table_id)
+        log_memory_usage(f"- After combining all batches for {endpoint}")
+
+        try:
+            upload_dataframe_to_bigquery(
+                project_id,
+                dataset_id,
+                table_id,
+                "CRU_DATA_WAREHOUSE_ELT_PROD",
+                df,
+                schema_json,
+            )
+            logger.info(f"Successfully uploaded {table_id} to BigQuery")
+        except Exception as e:
+            logger.exception(f"Upload {table_id} to BigQuery failed: {str(e)}")
+
+        # Clear memory
+        del df
+        del all_batches
+        log_memory_usage(f"- After uploading {endpoint}")
+
     # Update the excluded everyone ids
     try:
         upload_dataframe_to_bigquery(
@@ -750,11 +1010,11 @@ def sync_all_users(endpoint: str) -> None:
             "CRU_DATA_WAREHOUSE_ELT_PROD",
             df_everyone,
         )
+        logger.info(f"Successfully updated excluded everyone IDs")
     except Exception as e:
         logger.exception(
-            f"Upload okta_everyone_{endpoint.split('_')[0]}_ids to BigQuery failed: str(e)"
+            f"Upload okta_everyone_{endpoint.split('_')[0]}_ids to BigQuery failed: {str(e)}"
         )
-        pass
 
 
 def trigger_sync():
