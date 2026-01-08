@@ -3,6 +3,27 @@
 ## Overview
 This refactor addresses critical memory consumption issues in the okta-sync task by implementing batch processing for data retrieval and upload operations.
 
+## Cloud Run Environment Context
+
+**Current Production Configuration (Terraform: `cru-terraform/applications/data-warehouse/dot/prod/jobs.tf`):**
+- **Memory**: 16Gi (16 GB)
+- **CPU**: 4 cores
+- **Timeout**: 64,800 seconds (~18 hours)
+- **Schedule**: Weekdays at 1pm EST (5pm UTC)
+- **Max Retries**: 0
+- **Image**: `us-central1-docker.pkg.dev/.../okta-sync:latest`
+
+**Historical Memory Escalation:**
+- **Initial**: 4Gi memory, 2 CPU
+- **July 2025**: Increased to **32Gi** (8x increase!) due to OOM issues
+- **January 2026**: Reduced to 16Gi after optimization attempts
+- **Current Issue**: Still at 4x original allocation
+
+This history demonstrates that memory consumption has been a **critical production issue**. The refactor aims to:
+1. Reduce memory footprint significantly below 16Gi
+2. Enable future data growth without infrastructure changes
+3. Potentially allow reducing back to 8Gi or less
+
 ## Problem Statement
 The original implementation had two major memory bottlenecks:
 
@@ -18,21 +39,23 @@ For large datasets (e.g., thousands of groups with millions of members), this ap
 
 #### 1. `get_data_batch()` (Generator Function)
 ```python
-def get_data_batch(endpoint, url, headers, params, batch_size=10)
+def get_data_batch(endpoint, url, headers, params, batch_size=50)
 ```
 - **Yields** DataFrames in batches instead of returning one large DataFrame
-- Accumulates up to `batch_size` pages (default: 10) before yielding
+- Accumulates up to `batch_size` pages (default: 50) before yielding
 - Clears memory after each yield
 - Allows caller to process data incrementally
+- **Batch size rationale**: With 16Gi available, 50 pages (typically ~200 records/page = 10K records) is a reasonable batch that balances memory efficiency with processing speed
 
 #### 2. `get_all_users_batch()` (Generator Function)
 ```python
-def get_all_users_batch(endpoint, headers, params, ids, columns, id_batch_size=10)
+def get_all_users_batch(endpoint, headers, params, ids, columns, id_batch_size=50)
 ```
-- **Yields** DataFrames after processing every `id_batch_size` IDs (default: 10)
+- **Yields** DataFrames after processing every `id_batch_size` IDs (default: 50)
 - Processes user data for each ID and accumulates until batch threshold
 - Includes memory logging checkpoints
 - Clears batch memory after yielding
+- **Batch size rationale**: Processing 50 group/app IDs at once allows good throughput while keeping memory under control
 
 ### Updated Functions
 
@@ -66,9 +89,10 @@ def get_all_users_batch(endpoint, headers, params, ids, columns, id_batch_size=1
 - **Memory Monitoring**: Added `log_memory_usage()` calls at critical points
 
 ### Configurable Batch Sizes
-- `batch_size=10` for API page batches in `get_data_batch()`
-- `id_batch_size=10` for ID batches in `get_all_users_batch()`
+- `batch_size=50` for API page batches in `get_data_batch()`
+- `id_batch_size=50` for ID batches in `get_all_users_batch()`
 - Can be adjusted based on memory constraints and data volume
+- **Tuned for 16Gi Cloud Run environment**: Batch sizes optimized for current production allocation
 
 ### Backward Compatibility
 - Original functions (`get_data()`, `get_all_users()`) retained as deprecated
@@ -138,9 +162,30 @@ The refactor adds memory logging at these checkpoints:
 - After combining all batches in `sync_all_users()`
 - After uploading to BigQuery in `sync_all_users()`
 
+## Production Deployment Considerations
+
+### Memory Monitoring
+After deploying this refactor, monitor Cloud Run logs for:
+- Process memory usage at checkpoints (logged via `log_memory_usage()`)
+- Peak memory consumption during sync
+- Time to completion (may be slightly longer due to batch processing overhead)
+
+### Potential Infrastructure Optimization
+If memory usage drops significantly (e.g., stays under 8Gi):
+1. Consider reducing Cloud Run memory allocation in Terraform
+2. Could reduce to 8Gi or even back to original 4Gi
+3. Cost savings: ~$0.025/GB-hour × 8GB reduction × 18 hours/run × 5 runs/week
+
+### If Memory Issues Persist
+If still approaching 16Gi limits:
+1. Reduce batch sizes to 25 or even 10
+2. Consider implementing streaming uploads to BigQuery
+3. Process different endpoints sequentially instead of batching them all in memory
+
 ## Notes
 
-- Batch sizes can be tuned based on observed memory usage
+- Batch sizes (50) are optimized for 16Gi Cloud Run environment
+- Can be tuned down (25, 10) if memory pressure observed
 - Generator pattern allows for streaming processing if needed in future
-- CSV writes still use full DataFrame (for backward compatibility)
-- Consider streaming uploads in future if memory is still constrained
+- CSV writes still use full DataFrame (for backward compatibility with existing workflows)
+- Consider streaming uploads in future if memory is still constrained despite batching

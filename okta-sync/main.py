@@ -225,7 +225,7 @@ def get_data_batch(
     url: str,
     headers: Dict[str, str],
     params: Dict[Any, Any],
-    batch_size: int = 10,
+    batch_size: int = 50,
 ) -> pd.DataFrame:
     """
     Retrieves data from the specified Okta API endpoint in batches, yielding DataFrames.
@@ -239,7 +239,7 @@ def get_data_batch(
         url (str): The URL of the API endpoint.
         headers (Dict[str, str]): A dictionary of headers to include in the GET request.
         params (Dict[Any, Any]): A dictionary of parameters to include in the GET request.
-        batch_size (int): Number of pages to accumulate before yielding a batch. Default is 10.
+        batch_size (int): Number of pages to accumulate before yielding a batch. Default is 50.
 
     Yields:
         pd.DataFrame: A pandas DataFrame containing a batch of data retrieved from the API endpoint.
@@ -349,7 +349,7 @@ def get_all_users_batch(
     params: Dict[Any, Any],
     ids: List[str],
     columns: List[str],
-    id_batch_size: int = 10,
+    id_batch_size: int = 50,
 ):
     """
     Downloads user data for all provided app or group ids in batches, yielding DataFrames.
@@ -363,7 +363,7 @@ def get_all_users_batch(
         params (Dict[Any, Any]): A dictionary of parameters to include in the GET request.
         ids (List[str]): A list of group_ids or app_ids for which to download user data.
         columns (List[str]): A list of column names to include in the downloaded data.
-        id_batch_size (int): Number of IDs to process before yielding a batch. Default is 10.
+        id_batch_size (int): Number of IDs to process before yielding a batch. Default is 50.
 
     Yields:
         pd.DataFrame: A pandas DataFrame containing a batch of user data.
@@ -839,7 +839,7 @@ def sync_data(endpoint: str, use_batch_processing: bool = True) -> None:
     all_batches = []
 
     # First, process the main endpoint
-    for batch_df in get_data_batch(endpoint, url, headers, params, batch_size=10):
+    for batch_df in get_data_batch(endpoint, url, headers, params, batch_size=50):
         batch_count += 1
         all_batches.append(batch_df)
         logger.info(f"Processed batch {batch_count} with {len(batch_df)} records")
@@ -848,7 +848,7 @@ def sync_data(endpoint: str, use_batch_processing: bool = True) -> None:
     if endpoint == "users":
         params = {"limit": 200, "search": 'status eq "DEPROVISIONED"'}
         logger.info(f"Starting to download okta_{endpoint} deprovisioned...")
-        for batch_df in get_data_batch(endpoint, url, headers, params, batch_size=10):
+        for batch_df in get_data_batch(endpoint, url, headers, params, batch_size=50):
             batch_count += 1
             all_batches.append(batch_df)
             logger.info(f"Processed deprovisioned batch {batch_count} with {len(batch_df)} records")
@@ -967,7 +967,7 @@ def sync_all_users(endpoint: str, use_batch_processing: bool = True) -> None:
 
         # Process in batches and upload incrementally
         for batch_df in get_all_users_batch(
-            f"{endpoint.split('_')[0]}s", headers, params, ids, columns, id_batch_size=10
+            f"{endpoint.split('_')[0]}s", headers, params, ids, columns, id_batch_size=50
         ):
             batch_count += 1
             batch_df = match_schema(batch_df, schema_json)
