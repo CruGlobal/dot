@@ -19,6 +19,17 @@ from okta_sync_utils import (
     upload_to_gcs,
 )
 
+DEFAULT_PAGE_BATCH_SIZE = 50  # ~10K records per batch (~200 records/page)
+DEFAULT_USER_BATCH_SIZE = 50  # Process 50 pages before yielding
+DEDUP_KEYS = {
+    "okta_users": ["id"],
+    "okta_apps": ["id"],
+    "okta_groups": ["id"],
+    "okta_group_members": ["group_id", "id"],
+    "okta_app_users": ["app_id", "id"],
+}
+DEDUP_ORDER_COLUMNS = ["lastUpdated", "created"]
+
 
 class SingletonConfig:
     """
@@ -225,7 +236,7 @@ def get_data_batch(
     url: str,
     headers: Dict[str, str],
     params: Dict[Any, Any],
-    batch_size: int = 50,
+    batch_size: int = DEFAULT_PAGE_BATCH_SIZE,
 ) -> Iterator[pd.DataFrame]:
     """
     Retrieves data from the specified Okta API endpoint in batches, yielding DataFrames.
@@ -254,6 +265,7 @@ def get_data_batch(
     logger.info(f"Downloading {endpoint} page {page_count + 1} from {url}")
     r = get_request(url, headers, params)
     if not isinstance(r, requests.Response):
+        logger.error(f"Failed to fetch first page for {endpoint}. Generator exiting.")
         return
 
     data = r.json()
@@ -268,6 +280,9 @@ def get_data_batch(
         r = get_request(url, headers, params)
 
         if not isinstance(r, requests.Response):
+            logger.error(
+                f"Failed to fetch page {page_count + 1} for {endpoint}. Generator exiting."
+            )
             break
 
         data_next = r.json()
@@ -415,7 +430,7 @@ def get_all_users_batch(
     params: Dict[Any, Any],
     ids: List[str],
     columns: List[str],
-    batch_size: int = 50,
+    batch_size: int = DEFAULT_USER_BATCH_SIZE,
 ) -> Iterator[pd.DataFrame]:
     """
     Downloads user data for all provided app or group ids in batches, yielding DataFrames.
@@ -475,6 +490,9 @@ def get_all_users_batch(
                 else:
                     break
             else:
+                logger.error(
+                    f"Failed to fetch users for {endpoint[:-1]} {id} page {page}."
+                )
                 break
 
             if len(batch_dfs) >= batch_size:
@@ -625,10 +643,26 @@ def dedupe_table_bigquery(
     """
     logger = logging.getLogger("primary_logger")
     table_id_full = f"{project_id}.{dataset_id}.{table_id}"
-    logger.info(f"Deduplicating table {table_id_full}")
+    dedupe_keys = DEDUP_KEYS.get(table_id)
+    if not dedupe_keys:
+        logger.warning(f"No dedupe keys configured for {table_id_full}. Skipping.")
+        return
+
+    partition_by = ", ".join(dedupe_keys)
+    order_by = ", ".join([f"{col} desc" for col in DEDUP_ORDER_COLUMNS])
+    logger.info(f"Deduplicating table {table_id_full} by keys: {partition_by}")
     qry_dedupe = f"""
     create or replace table {table_id_full} as
-    select distinct * from {table_id_full};
+    select * except(rn)
+    from (
+        select *,
+            row_number() over (
+                partition by {partition_by}
+                order by {order_by}
+            ) as rn
+        from {table_id_full}
+    )
+    where rn = 1;
     """
     query_bigquery_as_dataframe(qry_dedupe, secret_name)
     logger.info(f"Deduplicated table {table_id_full}")
@@ -836,44 +870,7 @@ def sync_data(endpoint: str, use_batch_processing: bool = True) -> None:
     table_id = f"okta_{endpoint}"
     schema_json = get_schema(table_id)
     if schema_json is None:
-        logger.error(
-            f"Schema for {table_id} not found. Skip uploading to BigQuery."
-        )
-        if not use_batch_processing:
-            logger.info(f"Starting to download okta_{endpoint}...")
-            df = get_data(endpoint, url, headers, params)
-            if endpoint == "users":
-                params = {"limit": 200, "search": 'status eq "DEPROVISIONED"'}
-                logger.info(f"Starting to download okta_{endpoint} deprovisioned...")
-                df_deprovisioned = get_data(endpoint, url, headers, params)
-                df = pd.concat([df, df_deprovisioned], axis=0, ignore_index=True)
-                logger.info(f"Deprovisioned users added to okta_{endpoint}")
-            df = df.drop_duplicates()
-            write_to_csv(df, table_id)
-        else:
-            logger.info(f"Starting to download okta_{endpoint} using batch processing...")
-            first_write = True
-            for batch_df in get_data_batch(endpoint, url, headers, params, batch_size=50):
-                write_to_csv(
-                    batch_df,
-                    table_id,
-                    mode="w" if first_write else "a",
-                    include_header=first_write,
-                )
-                first_write = False
-            if endpoint == "users":
-                params = {"limit": 200, "search": 'status eq "DEPROVISIONED"'}
-                logger.info(f"Starting to download okta_{endpoint} deprovisioned...")
-                for batch_df in get_data_batch(
-                    endpoint, url, headers, params, batch_size=50
-                ):
-                    write_to_csv(
-                        batch_df,
-                        table_id,
-                        mode="w" if first_write else "a",
-                        include_header=first_write,
-                    )
-                    first_write = False
+        logger.error(f"Schema for {table_id} not found. Skip uploading to BigQuery.")
         return
 
     if not use_batch_processing:
@@ -910,7 +907,6 @@ def sync_data(endpoint: str, use_batch_processing: bool = True) -> None:
         if batch_df.empty:
             return
         batch_df = match_schema(batch_df, schema_json)
-        batch_df = batch_df.drop_duplicates()
         write_to_csv(
             batch_df,
             table_id,
@@ -931,28 +927,25 @@ def sync_data(endpoint: str, use_batch_processing: bool = True) -> None:
         first_write = False
         wrote_any = True
 
-    for batch_df in get_data_batch(endpoint, url, headers, params, batch_size=50):
+    for batch_df in get_data_batch(
+        endpoint, url, headers, params, batch_size=DEFAULT_PAGE_BATCH_SIZE
+    ):
         upload_batch(batch_df, "main")
 
     if endpoint == "users":
         params = {"limit": 200, "search": 'status eq "DEPROVISIONED"'}
         logger.info(f"Starting to download okta_{endpoint} deprovisioned...")
-        for batch_df in get_data_batch(endpoint, url, headers, params, batch_size=50):
+        for batch_df in get_data_batch(
+            endpoint, url, headers, params, batch_size=DEFAULT_PAGE_BATCH_SIZE
+        ):
             upload_batch(batch_df, "deprovisioned")
         logger.info(f"Deprovisioned users added to okta_{endpoint}")
 
     if not wrote_any:
-        empty_df = match_schema(pd.DataFrame(), schema_json)
-        write_to_csv(empty_df, table_id)
-        upload_dataframe_to_bigquery(
-            project_id,
-            dataset_id,
-            table_id,
-            "CRU_DATA_WAREHOUSE_ELT_PROD",
-            empty_df,
-            schema_json,
-            write_disposition="WRITE_TRUNCATE",
+        logger.error(
+            f"No data returned for okta_{endpoint}. Aborting to avoid truncation."
         )
+        raise RuntimeError(f"No data returned for okta_{endpoint}")
 
     dedupe_table_bigquery(
         project_id, dataset_id, table_id, "CRU_DATA_WAREHOUSE_ELT_PROD"
@@ -1036,12 +1029,16 @@ def sync_all_users(endpoint: str, use_batch_processing: bool = True) -> None:
         first_write = True
         wrote_any = False
         for batch_df in get_all_users_batch(
-            f"{endpoint.split('_')[0]}s", headers, params, ids, columns, batch_size=50
+            f"{endpoint.split('_')[0]}s",
+            headers,
+            params,
+            ids,
+            columns,
+            batch_size=DEFAULT_USER_BATCH_SIZE,
         ):
             if batch_df.empty:
                 continue
             batch_df = match_schema(batch_df, schema_json)
-            batch_df = batch_df.drop_duplicates()
             write_to_csv(
                 batch_df,
                 table_id,
@@ -1071,17 +1068,10 @@ def sync_all_users(endpoint: str, use_batch_processing: bool = True) -> None:
             log_memory_usage(f"- After uploading batch for {endpoint}")
 
         if not wrote_any:
-            empty_df = match_schema(pd.DataFrame(), schema_json)
-            write_to_csv(empty_df, table_id)
-            upload_dataframe_to_bigquery(
-                project_id,
-                dataset_id,
-                table_id,
-                "CRU_DATA_WAREHOUSE_ELT_PROD",
-                empty_df,
-                schema_json,
-                write_disposition="WRITE_TRUNCATE",
+            logger.error(
+                f"No data returned for okta_{endpoint}. Aborting to avoid truncation."
             )
+            raise RuntimeError(f"No data returned for okta_{endpoint}")
 
         dedupe_table_bigquery(
             project_id, dataset_id, table_id, "CRU_DATA_WAREHOUSE_ELT_PROD"
@@ -1097,9 +1087,8 @@ def sync_all_users(endpoint: str, use_batch_processing: bool = True) -> None:
         )
     except Exception as e:
         logger.exception(
-            f"Upload okta_everyone_{endpoint.split('_')[0]}_ids to BigQuery failed: str(e)"
+            f"Upload okta_everyone_{endpoint.split('_')[0]}_ids to BigQuery failed: {str(e)}"
         )
-        pass
 
 
 def trigger_sync():
