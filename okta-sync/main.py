@@ -21,14 +21,13 @@ from okta_sync_utils import (
 
 DEFAULT_PAGE_BATCH_SIZE = 50  # ~10K records per batch (~200 records/page)
 DEFAULT_USER_BATCH_SIZE = 50  # Process 50 pages before yielding
-DEDUP_KEYS = {
-    "okta_users": ["id"],
-    "okta_apps": ["id"],
-    "okta_groups": ["id"],
-    "okta_group_members": ["group_id", "id"],
-    "okta_app_users": ["app_id", "id"],
+DEDUP_CONFIG = {
+    "okta_users": {"keys": ["id"], "order_by": ["lastUpdated", "created"]},
+    "okta_apps": {"keys": ["id"], "order_by": ["lastUpdated", "created"]},
+    "okta_groups": {"keys": ["id"], "order_by": ["lastUpdated", "created"]},
+    "okta_group_members": {"keys": ["group_id", "id"], "order_by": None},
+    "okta_app_users": {"keys": ["app_id", "id"], "order_by": None},
 }
-DEDUP_ORDER_COLUMNS = ["lastUpdated", "created"]
 
 
 class SingletonConfig:
@@ -643,13 +642,17 @@ def dedupe_table_bigquery(
     """
     logger = logging.getLogger("primary_logger")
     table_id_full = f"{project_id}.{dataset_id}.{table_id}"
-    dedupe_keys = DEDUP_KEYS.get(table_id)
-    if not dedupe_keys:
-        logger.warning(f"No dedupe keys configured for {table_id_full}. Skipping.")
+    config = DEDUP_CONFIG.get(table_id)
+    if not config:
+        logger.warning(f"No dedupe config for {table_id_full}. Skipping.")
         return
 
-    partition_by = ", ".join(dedupe_keys)
-    order_by = ", ".join([f"{col} desc" for col in DEDUP_ORDER_COLUMNS])
+    partition_by = ", ".join(config["keys"])
+    order_by = ""
+    if config.get("order_by"):
+        order_by_cols = ", ".join([f"{col} desc" for col in config["order_by"]])
+        order_by = f"order by {order_by_cols}"
+
     logger.info(f"Deduplicating table {table_id_full} by keys: {partition_by}")
     qry_dedupe = f"""
     create or replace table {table_id_full} as
@@ -658,7 +661,7 @@ def dedupe_table_bigquery(
         select *,
             row_number() over (
                 partition by {partition_by}
-                order by {order_by}
+                {order_by}
             ) as rn
         from {table_id_full}
     )
@@ -1089,6 +1092,7 @@ def sync_all_users(endpoint: str, use_batch_processing: bool = True) -> None:
         logger.exception(
             f"Upload okta_everyone_{endpoint.split('_')[0]}_ids to BigQuery failed: {str(e)}"
         )
+        # Non-critical table; keep running even if this derived list fails to update.
 
 
 def trigger_sync():
