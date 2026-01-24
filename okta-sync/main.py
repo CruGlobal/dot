@@ -249,7 +249,7 @@ def get_data_batch(
         url (str): The URL of the API endpoint.
         headers (Dict[str, str]): A dictionary of headers to include in the GET request.
         params (Dict[Any, Any]): A dictionary of parameters to include in the GET request.
-        batch_size (int): Number of pages to accumulate before yielding a batch. Default is 50.
+        batch_size (int): Number of pages to accumulate before yielding a batch (across all IDs). Default is 50 pages.
 
     Yields:
         pd.DataFrame: A pandas DataFrame containing a batch of data retrieved from the API endpoint.
@@ -946,9 +946,9 @@ def sync_data(endpoint: str, use_batch_processing: bool = True) -> None:
 
     if not wrote_any:
         logger.error(
-            f"No data returned for okta_{endpoint}. Aborting to avoid truncation."
+            f"No data returned for okta_{endpoint}. Skipping upload to avoid truncation."
         )
-        raise RuntimeError(f"No data returned for okta_{endpoint}")
+        return
 
     dedupe_table_bigquery(
         project_id, dataset_id, table_id, "CRU_DATA_WAREHOUSE_ELT_PROD"
@@ -1072,9 +1072,9 @@ def sync_all_users(endpoint: str, use_batch_processing: bool = True) -> None:
 
         if not wrote_any:
             logger.error(
-                f"No data returned for okta_{endpoint}. Aborting to avoid truncation."
+                f"No data returned for okta_{endpoint}. Skipping upload to avoid truncation."
             )
-            raise RuntimeError(f"No data returned for okta_{endpoint}")
+            return
 
         dedupe_table_bigquery(
             project_id, dataset_id, table_id, "CRU_DATA_WAREHOUSE_ELT_PROD"
