@@ -9,6 +9,10 @@ from typing import List, Dict, Any, Optional, Union, Iterator
 import pandas as pd
 from pythonjsonlogger import jsonlogger
 import psutil
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
 from google.cloud import pubsub_v1
 from okta_sync_utils import (
     get_request,
@@ -28,6 +32,11 @@ DEDUP_CONFIG = {
     "okta_group_members": {"keys": ["group_id", "id"], "order_by": None},
     "okta_app_users": {"keys": ["app_id", "id"], "order_by": None},
 }
+
+if load_dotenv is not None:
+    env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".env"))
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
 
 
 class SingletonConfig:
