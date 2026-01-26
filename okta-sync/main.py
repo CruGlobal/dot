@@ -20,7 +20,7 @@ from okta_sync_utils import (
 )
 
 DEFAULT_PAGE_BATCH_SIZE = 50  # ~10K records per batch (~200 records/page)
-DEFAULT_USER_BATCH_SIZE = 50  # Process 50 pages before yielding
+DEFAULT_USER_PAGE_BATCH_SIZE = 50  # Pages per batch for user/member data
 DEDUP_CONFIG = {
     "okta_users": {"keys": ["id"], "order_by": ["lastUpdated", "created"]},
     "okta_apps": {"keys": ["id"], "order_by": ["lastUpdated", "created"]},
@@ -429,7 +429,7 @@ def get_all_users_batch(
     params: Dict[Any, Any],
     ids: List[str],
     columns: List[str],
-    batch_size: int = DEFAULT_USER_BATCH_SIZE,
+    batch_size: int = DEFAULT_USER_PAGE_BATCH_SIZE,
 ) -> Iterator[pd.DataFrame]:
     """
     Downloads user data for all provided app or group ids in batches, yielding DataFrames.
@@ -1037,7 +1037,7 @@ def sync_all_users(endpoint: str, use_batch_processing: bool = True) -> None:
             params,
             ids,
             columns,
-            batch_size=DEFAULT_USER_BATCH_SIZE,
+            batch_size=DEFAULT_USER_PAGE_BATCH_SIZE,
         ):
             if batch_df.empty:
                 continue
