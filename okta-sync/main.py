@@ -25,8 +25,8 @@ DEDUP_CONFIG = {
     "okta_users": {"keys": ["id"], "order_by": ["lastUpdated", "created"]},
     "okta_apps": {"keys": ["id"], "order_by": ["lastUpdated", "created"]},
     "okta_groups": {"keys": ["id"], "order_by": ["lastUpdated", "created"]},
-    "okta_group_members": {"keys": ["group_id", "id"], "order_by": None},
-    "okta_app_users": {"keys": ["app_id", "id"], "order_by": None},
+    "okta_group_members": {"keys": ["group_id", "id"], "order_by": ["lastUpdated", "created"]},
+    "okta_app_users": {"keys": ["app_id", "id"], "order_by": ["lastUpdated", "created"]},
 }
 
 
