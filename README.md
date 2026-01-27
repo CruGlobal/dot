@@ -85,3 +85,91 @@ To clean up when you're done:
  * `terraform destroy`
 
 Infrastructure learnings here can be applied to the terraform config for the beta and production environments.
+
+
+## Service Accounts
+
+Service accounts for this project are managed in a separate Terraform repository:
+- **Location**: `cru-terraform/applications/data-warehouse/dot/prod/permissions.tf`
+- **Pattern**: One service account per Cloud Run function/job
+- **Naming convention**: `{function-name}@{project-id}.iam.gserviceaccount.com`
+
+### Adding a New Service Account
+
+1. Add the service account resource to `permissions.tf` in the cru-terraform repo
+2. Add required IAM bindings (Pub/Sub publisher, BigQuery access, etc.)
+3. If the function needs access to Google Sheets, share those files with the service account email
+
+
+## Pub/Sub Topics
+
+### cloud-run-job-completed
+This topic triggers dbt jobs after a Cloud Run job completes.
+
+**Publishers**: okta-sync, woo-sync, process-geography, google-sheets-trigger
+
+**Subscriber**: A Cloud Function (not in this repo) that calls dbt-trigger
+
+To trigger a dbt job from your function:
+```python
+from google.cloud import pubsub_v1
+import json
+import os
+
+def publish_pubsub_message(data: dict, topic_name: str) -> None:
+    google_cloud_project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
+    publisher = pubsub_v1.PublisherClient()
+    topic_path = publisher.topic_path(google_cloud_project_id, topic_name)
+    data_encoded = json.dumps(data).encode("utf-8")
+    future = publisher.publish(topic_path, data_encoded)
+    future.result()
+
+# Trigger dbt job:
+publish_pubsub_message({"job_id": "YOUR_DBT_JOB_ID"}, "cloud-run-job-completed")
+```
+
+
+## google-sheets-trigger
+
+A reusable Cloud Function that checks Google Sheets for changes and triggers dbt jobs.
+
+### Usage
+
+Configure schedules in Terraform (`poc-terraform/functions.tf`). Each schedule specifies:
+- Which sheets to monitor (by ID and name)
+- Which dbt job to trigger
+- When to run (cron schedule)
+- Whether to include weekends in change detection
+
+Example Terraform configuration:
+```hcl
+module "google-sheets-trigger" {
+  source = "..."
+  schedule = {
+    my_sheets: {
+      cron: "0 17 * * 1-5",  # M-F 5pm
+      argument = {
+        "sheets" = [
+          { "id" = "your-sheet-id", "name" = "My Sheet" }
+        ],
+        "dbt_job_id" = "123456",
+        "include_weekends" = false
+      }
+    }
+  }
+}
+```
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `sheets` | array | Yes | List of sheets to monitor, each with `id` and `name` |
+| `dbt_job_id` | string | Yes | The dbt job ID to trigger when changes are detected |
+| `include_weekends` | boolean | No | If `true`, always looks back 24 hours. If `false` (default), looks back 72 hours on Monday to cover the weekend. |
+
+### Permissions
+
+Share all monitored Google Sheets with the service account:
+- `google-sheets-trigger@{project-id}.iam.gserviceaccount.com`
+- Grant "Viewer" access (read-only is sufficient)
