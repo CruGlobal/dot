@@ -31,7 +31,7 @@ module "google-sheets-trigger" {
 
   schedule = {
     dw_security_sheets : {
-      cron : "0 17 * * 1-5", # M-F 5pm EST
+      cron : "0 19 * * 1-5", # M-F 7pm EST
       argument = {
         "sheets" = [
           { "id" = "1bJzA7_THeCd3oZiLAfktBqHSx9_bOdFEbWLMVkY47Mc", "name" = "Power BI RLS - Financial" },
