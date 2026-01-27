@@ -57,8 +57,38 @@ Creating a new secret version does not automatically take effect.
 You'll need to trigger a new deployment.
 See below, except ignore the advice about "only doing this in the POC env".
 
-## Deploy new code manually:
-You probably should only be doing this in the POC env.
+## Environments
+
+This project uses three environments, each tied to a Git branch. Pushing code to a branch
+automatically deploys the corresponding function(s) via GitHub Actions.
+
+| Environment | Branch | GCP Project | Purpose |
+|-------------|--------|-------------|---------|
+| **Staging** | `staging` | staging GCP project | Testing and validation before production. Use this for all pre-production testing. |
+| **Production** | `main` | production GCP project | Live environment. Deploy by merging PRs to `main`. |
+| **POC** | `poc` | `cru-data-orchestration-poc` | Experimental sandbox. Requires local Terraform setup (see below). Not needed for regular testing. |
+
+### Testing in staging
+
+Staging is the recommended environment for testing new or updated functions:
+
+1. Merge your feature branch into `staging` and push (or push directly to `staging`):
+   ```bash
+   git checkout staging
+   git merge feature/your-feature
+   git push origin staging
+   ```
+2. GitHub Actions will automatically deploy the function to the staging GCP project.
+3. Use Cloud Scheduler in the [GCP Console](https://console.cloud.google.com/cloudscheduler) to **"Force Run"** the scheduled job and verify behavior.
+4. Check [Cloud Logging](https://console.cloud.google.com/logs) for function output and errors.
+
+### Deploying to production
+
+After testing in staging, merge your PR to `main`. GitHub Actions will deploy to the production GCP project.
+
+### Deploy new code manually
+
+You should only need to do this for experimental work in the POC environment:
 
 ```bash
 gcloud functions deploy fivetran-trigger --source=. --entry-point=hello_http --runtime=python312 --gen2 --region=us-central1
@@ -66,6 +96,8 @@ gcloud functions deploy fivetran-trigger --source=. --entry-point=hello_http --r
 
 
 ## POC environment infrastructure
+
+> **Note:** The POC environment is for experimental work only. For regular testing, use the **staging** environment (see above).
 
 The POC environment is contained within the [cru-data-orchestration-poc](https://console.cloud.google.com/welcome?project=cru-data-orchestration-poc) GCP project.
 The project and its integrations with Datadog and Github are managed by Terraform and Atlantis in the [cru-terraform repo](https://github.com/CruGlobal/cru-terraform/tree/master/applications/data-warehouse/dot/poc).
@@ -84,7 +116,7 @@ To spin up the POC infrastructure:
 To clean up when you're done:
  * `terraform destroy`
 
-Infrastructure learnings here can be applied to the terraform config for the beta and production environments.
+Infrastructure learnings here can be applied to the terraform config for the production environment.
 
 
 ## Service Accounts
