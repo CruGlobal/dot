@@ -606,9 +606,9 @@ def orders(o, order_list, env_var_list):
     list.append(o['cru_data']['shipping']['date_shipped']) 
 
     discount_amount = 0
-    discount_code = ''
-    discount_type = ''
-    discount_description = ''
+    discount_code = None
+    discount_type = None
+    discount_description = None
     cd = o['cru_data']
     for x in reversed(cd['discounts']):
         discount_amount = x['amount']
