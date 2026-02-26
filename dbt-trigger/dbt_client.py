@@ -31,11 +31,11 @@ class DbtClient:
             logger.exception(f"Error in making request to {url}: {e}")
             raise
 
-    def trigger_job(self, job_id):
+    def trigger_job(self, job_id, cause="Triggered by Google Cloud Function"):
         logger.info(f"Triggering dbt job {job_id} on account {self.account_id}")
         response = self._request(
             f"{self.account_url}/jobs/{job_id}/run/",
-            data={"cause": f"Triggered by Google Cloud Function"},
+            data={"cause": cause},
             method="POST",
         )
         return response
