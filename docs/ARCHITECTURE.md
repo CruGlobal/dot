@@ -135,6 +135,8 @@ The webhook function should validate, classify, and publish — then return imme
 
 If you need to wait for a job to complete, use a Cloud Workflow with `sys.sleep` and status check steps. Cloud Functions should be stateless and short-lived.
 
+See [Testing Guide](TESTING.md) for POC deployment and workflow verification steps.
+
 ## Adding a New Workflow
 
 1. **Create the Pub/Sub topic** in Terraform (if new)

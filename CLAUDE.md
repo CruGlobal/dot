@@ -29,11 +29,18 @@ Deployment uses two repos:
 If GHA fails with "trigger required", it means Terraform hasn't been applied yet for that
 function in the target environment. The function must exist in GCP before GHA can update it.
 
+## Architecture
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the push-not-poll pattern, workflow diagrams, and anti-patterns.
+
+**Key principle**: Cloud Functions validate and publish to Pub/Sub, then return immediately. All orchestration (API calls, delays, retries, status polling) happens in Cloud Workflows. Do NOT poll from Cloud Functions or use Cloud Tasks.
+
 ## Functions
 
 | Directory | Purpose |
 |-----------|---------|
-| `dbt-trigger/` | Triggers dbt Cloud jobs via API |
+| `dbt-trigger/` | Triggers dbt Cloud jobs via API. Accepts optional `cause` for tracking. |
+| `dbt-webhook/` | Receives dbt Cloud webhooks. Routes success → Fabric, failure → retry. |
 | `fivetran-trigger/` | Triggers Fivetran sync jobs |
 | `fivetran-webhook/` | Receives Fivetran webhook callbacks |
 | `gsheets-trigger/` | Syncs data from Google Sheets |
@@ -46,13 +53,15 @@ function in the target environment. The function must exist in GCP before GHA ca
 - Files in shared drives require `supportsAllDrives=True` in API calls.
 - To test locally against real Google Sheets, the sheets must be shared with your authenticated account (or the service account).
 
-## Local Testing
+## Testing
+
+See [docs/TESTING.md](docs/TESTING.md) for the full testing guide including POC workflow testing.
 
 ### Unit tests (no GCP credentials needed)
 ```bash
-cd gsheets-trigger
+cd <function-dir>
 pip install -r requirements.txt -r requirements-test.txt
-pytest main_test.py -v
+pytest -v
 ```
 
 ### Integration test against real Google Sheets
@@ -61,3 +70,17 @@ export GOOGLE_APPLICATION_CREDENTIALS=~/.config/gcloud/application_default_crede
 cd gsheets-trigger
 python -c "from sheets_client import SheetsClient; c = SheetsClient(); print(c.get_modified_time('SHEET_ID'))"
 ```
+
+## Infrastructure (Terraform)
+
+Cloud Function infrastructure is managed in `cru-terraform`, not this repo:
+- **Prod**: `cru-terraform/applications/data-warehouse/dot/prod/`
+- **Stage**: `cru-terraform/applications/data-warehouse/dot/stage/`
+- **POC**: `poc-terraform/` (this repo, local state)
+
+Key files in cru-terraform:
+- `functions.tf` — Cloud Function definitions, schedules, secrets
+- `workflow.tf` — Cloud Workflow definitions
+- `event-triggers.tf` — Eventarc triggers (Pub/Sub → Workflow)
+- `permissions.tf` — IAM bindings for service accounts
+- `*.yaml` — Workflow YAML files (referenced by `workflow.tf` via `templatefile()`)
