@@ -141,10 +141,37 @@ See [Testing Guide](TESTING.md) for POC deployment and workflow verification ste
 
 1. **Create the Pub/Sub topic** in Terraform (if new)
 2. **Create the workflow YAML** file (see `fabric_job_workflow.yaml` or `dbt_retry_workflow.yaml` as reference)
-3. **Register the workflow** in `workflow.tf` using `google_workflows_workflow`
+3. **Register the workflow** in `workflow.tf` using `google_workflows_workflow` with `templatefile()`
 4. **Wire Eventarc** in `event-triggers.tf` using the `eventarc_standard/workflow` module
 5. **Update the Cloud Function** to publish to the new topic
 6. **Grant permissions** to the workflow's service account in `permissions.tf`
+
+### Terraform Gotchas
+
+**`workflow_id` must be a static string for new workflows.** The `eventarc_standard/workflow` module uses `count = length(var.workflow_id) > 0 ? 1 : 0`. If `workflow_id` references a resource that doesn't exist yet (e.g., `google_workflows_workflow.my_workflow.id`), Terraform can't resolve the count at plan time and the plan fails with `Invalid count argument`.
+
+Use a hardcoded path string instead:
+```hcl
+# WRONG — fails on first plan because the workflow doesn't exist yet
+workflow_id = google_workflows_workflow.my_workflow.id
+
+# CORRECT — static string that Terraform can evaluate at plan time
+workflow_id = "projects/${module.project.project_id}/locations/us-central1/workflows/my-workflow-name"
+```
+
+Once the workflow exists in state (after first apply), either form works. But since the first `atlantis apply` creates the workflow and the eventarc trigger together, the static string is required.
+
+**Workflow YAML uses `$${...}` for Cloud Workflows expressions.** Because `templatefile()` interprets `${...}` as Terraform interpolation, all Cloud Workflows expressions in YAML files must use the double-dollar escape: `$${variable_name}`. Terraform variables passed to the template use the normal single-dollar `${var_name}`.
+
+```yaml
+# Terraform variable (resolved by templatefile):
+url: "https://${region}-${project_id}.cloudfunctions.net/${function_name}"
+
+# Cloud Workflows expression (passed through literally):
+payload: $${json.decode(base64.decode(event.data.message.data))}
+```
+
+When testing workflow YAML directly via `gcloud workflows deploy` (not through Terraform), use single-dollar `${...}` — see [TESTING.md](TESTING.md) for details.
 
 ## Infrastructure Reference
 
