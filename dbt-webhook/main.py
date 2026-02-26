@@ -11,7 +11,8 @@ logger.propagate = False
 gcp_project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", None)
 dbt_webhook_secret = os.environ.get("DBT_WEBHOOK_SECRET", None)
 publisher = pubsub_v1.PublisherClient()
-topic_path = publisher.topic_path(gcp_project_id, "fabric-job-events")
+fabric_topic_path = publisher.topic_path(gcp_project_id, "fabric-job-events")
+retry_topic_path = publisher.topic_path(gcp_project_id, "dbt-retry-events")
 
 
 class CloudLoggingFormatter(logging.Formatter):
@@ -104,6 +105,111 @@ def create_fabric_job_message(fabric_config: dict, dbt_info: dict) -> dict:
     }
 
 
+def create_retry_message(dbt_info: dict) -> dict:
+    """
+    Create a retry event message for a failed dbt job.
+
+    Args:
+        dbt_info: Parsed DBT webhook information
+
+    Returns:
+        dict: Retry event message for the dbt-retry-events topic
+    """
+    return {
+        "job_id": dbt_info.get("job_id", ""),
+        "run_id": dbt_info.get("run_id", ""),
+        "job_name": dbt_info.get("job_name", ""),
+        "run_status": dbt_info.get("run_status", ""),
+        "run_status_code": dbt_info.get("run_status_code", ""),
+        "environment_id": dbt_info.get("environment_id", ""),
+        "account_id": dbt_info.get("account_id", ""),
+        "attempt_number": 0,
+    }
+
+
+def handle_job_failure(dbt_info: dict) -> tuple:
+    """
+    Handle a failed dbt job completion by publishing to the retry topic.
+    """
+    logger.info(
+        f"DBT job failed: job_id={dbt_info.get('job_id')}, "
+        f"run_id={dbt_info.get('run_id')}, status={dbt_info.get('run_status')}"
+    )
+
+    try:
+        retry_message = create_retry_message(dbt_info)
+        message_json = json.dumps(retry_message)
+        message_bytes = message_json.encode("utf-8")
+
+        future = publisher.publish(retry_topic_path, message_bytes)
+        message_id = future.result()
+
+        logger.info(
+            f"Published retry event to Pub/Sub: message_id={message_id}, "
+            f"job_id={dbt_info.get('job_id')}, run_id={dbt_info.get('run_id')}"
+        )
+
+        return (
+            {
+                "status": "failure_processed",
+                "message": "Job failure published to retry topic",
+                "message_id": message_id,
+                "dbt_job_id": dbt_info.get("job_id"),
+                "dbt_run_id": dbt_info.get("run_id"),
+            },
+            200,
+        )
+
+    except Exception as e:
+        logger.exception(f"Error publishing retry event to Pub/Sub: {str(e)}")
+        return (f"Error publishing retry event: {str(e)}", 500)
+
+
+def handle_job_success(dbt_info: dict) -> tuple:
+    """
+    Handle a successful dbt job completion by triggering Fabric jobs if mapped.
+    """
+    fabric_config = map_dbt_to_fabric(dbt_info.get("job_id", ""))
+    if not fabric_config:
+        logger.info(
+            f"No Fabric mapping configured for DBT job ID: {dbt_info.get('job_id')} - webhook processed successfully"
+        )
+        return (
+            "Webhook processed - no Fabric job mapping configured for this DBT job",
+            200,
+        )
+
+    fabric_message = create_fabric_job_message(fabric_config, dbt_info)
+
+    try:
+        message_json = json.dumps(fabric_message)
+        message_bytes = message_json.encode("utf-8")
+
+        future = publisher.publish(fabric_topic_path, message_bytes)
+        message_id = future.result()
+
+        logger.info(
+            f"Published Fabric job request to Pub/Sub: message_id={message_id}, "
+            f"workspace_id={fabric_config['workspace_id']}, item_id={fabric_config['item_id']}"
+        )
+
+        return (
+            {
+                "status": "success",
+                "message": "Fabric job request published",
+                "message_id": message_id,
+                "dbt_job_id": dbt_info.get("job_id"),
+                "fabric_workspace_id": fabric_config["workspace_id"],
+                "fabric_item_id": fabric_config["item_id"],
+            },
+            200,
+        )
+
+    except Exception as e:
+        logger.exception(f"Error publishing to Pub/Sub: {str(e)}")
+        return (f"Error publishing to Pub/Sub: {str(e)}", 500)
+
+
 @functions_framework.http
 def webhook_handler(request):
     """
@@ -144,57 +250,28 @@ def webhook_handler(request):
             f"Received DBT webhook: event_type={dbt_info.get('event_type')}, job_id={dbt_info.get('job_id')}, run_status={dbt_info.get('run_status')}"
         )
 
-        # Only process successful job completions
-        if dbt_info.get("event_type") != "job.run.completed" or (
-            dbt_info.get("run_status") != "Success"
-            and dbt_info.get("run_status_code") != 10
-        ):
+        # Only process job completion events
+        if dbt_info.get("event_type") != "job.run.completed":
             logger.info(
-                f"Ignoring DBT event - not a successful job completion: {dbt_info.get('event_type')}, status: {dbt_info.get('run_status')}, status_code: {dbt_info.get('run_status_code')}"
+                f"Ignoring DBT event - not a job completion: {dbt_info.get('event_type')}"
             )
-            return ("Event ignored - not a successful job completion", 200)
+            return ("Event ignored - not a job completion", 200)
 
-        # Map DBT job to Fabric configuration
-        fabric_config = map_dbt_to_fabric(dbt_info.get("job_id", ""))
-        if not fabric_config:
-            logger.info(
-                f"No Fabric mapping configured for DBT job ID: {dbt_info.get('job_id')} - webhook processed successfully"
-            )
-            return (
-                "Webhook processed - no Fabric job mapping configured for this DBT job",
-                200,
-            )
+        run_status_code = dbt_info.get("run_status_code")
 
-        # Create fabric job request message
-        fabric_message = create_fabric_job_message(fabric_config, dbt_info)
+        # Handle failed job completions (status_code 20 = Error)
+        if run_status_code == 20 or dbt_info.get("run_status") == "Error":
+            return handle_job_failure(dbt_info)
 
-        # Publish to Pub/Sub
-        try:
-            message_json = json.dumps(fabric_message)
-            message_bytes = message_json.encode("utf-8")
+        # Handle successful job completions (status_code 10 = Success)
+        if run_status_code == 10 or dbt_info.get("run_status") == "Success":
+            return handle_job_success(dbt_info)
 
-            future = publisher.publish(topic_path, message_bytes)
-            message_id = future.result()
-
-            logger.info(
-                f"Published Fabric job request to Pub/Sub: message_id={message_id}, workspace_id={fabric_config['workspace_id']}, item_id={fabric_config['item_id']}"
-            )
-
-            return (
-                {
-                    "status": "success",
-                    "message": "Fabric job request published",
-                    "message_id": message_id,
-                    "dbt_job_id": dbt_info.get("job_id"),
-                    "fabric_workspace_id": fabric_config["workspace_id"],
-                    "fabric_item_id": fabric_config["item_id"],
-                },
-                200,
-            )
-
-        except Exception as e:
-            logger.exception(f"Error publishing to Pub/Sub: {str(e)}")
-            return (f"Error publishing to Pub/Sub: {str(e)}", 500)
+        # Other statuses (cancelled, etc.) — log and ignore
+        logger.info(
+            f"Ignoring DBT event with unhandled status: {dbt_info.get('run_status')}, status_code: {run_status_code}"
+        )
+        return ("Event ignored - unhandled run status", 200)
 
     except Exception as e:
         logger.exception(f"Unhandled error in webhook handler: {str(e)}")
