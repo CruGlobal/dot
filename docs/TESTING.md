@@ -162,19 +162,3 @@ git push origin poc
 ```
 
 **Note**: The dbt-trigger GHA deployment may fail in POC because the function was originally created by terraform with a schedule trigger, not HTTP trigger. The webhook deployment works correctly.
-
-## Test Results: dbt-retry-workflow (2026-02-26)
-
-### Simplified Logic Test
-- Message decoding: PASS
-- Field extraction (job_id, run_id, attempt_number, etc.): PASS
-- Retry limit branching (attempt < max → retry, attempt >= max → stop): PASS
-- Cause string construction: PASS
-
-### Full Integration Test (real secrets + real dbt Cloud API)
-- Secret Manager access (`dbt-trigger_DBT_TOKEN`): PASS
-- Token decode + BOM strip: PASS
-- dbt Cloud API call (fetch run_results.json for run 465417728): PASS
-- Failure classification (found 1/28 failed nodes): PASS
-- Retry decision logic: PASS
-- Max retries exceeded path: PASS (tested separately)
