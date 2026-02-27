@@ -52,10 +52,10 @@ Pub/Sub topic: fivetran-events
 ### dbt → Fabric (Webhook → Pub/Sub → Fabric API)
 
 ```
-dbt Cloud job completes
+dbt Cloud job completes successfully (status_code=10)
   → POST to dbt-webhook Cloud Function
     → verify signature, parse payload
-    → filter: only status_code=10 (Success) passes
+    → route by status: success → fabric topic, failure → retry topic
     → map job_id → Fabric config
     → publish to Pub/Sub topic: fabric-job-events
     → return 200 immediately
@@ -68,6 +68,38 @@ Pub/Sub topic: fabric-job-events
     → if completed: optionally trigger Power BI refresh
     → if failed: log for manual review (dormant retry logic available)
 ```
+
+### dbt Job Failure Retry (Webhook → Pub/Sub → dbt Cloud)
+
+```
+dbt Cloud job fails (status_code=20)
+  → POST to dbt-webhook Cloud Function
+    → verify signature, parse payload
+    → detect failure status (status_code=20 or run_status="Error")
+    → publish to Pub/Sub topic: dbt-retry-events
+      (includes job_id, run_id, job_name, attempt_number=0)
+    → return 200 immediately
+
+Pub/Sub topic: dbt-retry-events
+  → Eventarc → Cloud Workflow (dbt-retry-workflow)
+    → decode message, extract retry context
+    → check attempt_number < max_retries (default: 1)
+    → if max retries exceeded: log DBT_JOB_RETRY_EXHAUSTED alert, stop
+    → fetch run_results.json from dbt Cloud API (classify failure)
+    → wait 5 minutes (base_delay_seconds)
+    → POST to dbt-trigger Cloud Function with:
+        job_id: original job_id
+        cause: "Auto-retry (attempt N): transient failure in run {run_id}"
+    → log retry success
+```
+
+**Key design decisions:**
+
+- **Max 1 retry** — prevents runaway retry loops. If a job fails twice, it needs human attention.
+- **5-minute delay** — gives transient issues (network, API rate limits) time to resolve without being so long that alerts are delayed.
+- **Cause tracking** — the retry workflow passes a descriptive `cause` to dbt-trigger so retried runs are clearly identified in the dbt Cloud UI. The `cause` field also enables future loop detection (check if previous run was already a retry).
+- **run_results.json fetch** — the workflow fetches artifacts to classify failures. If artifacts aren't available (setup/compile failure), the job is still retried since those are often transient.
+- **Uses dbt-trigger SA** — the retry workflow runs as the dbt-trigger service account, which already has permissions to trigger dbt jobs and access the DBT_TOKEN secret.
 
 ## Anti-Patterns
 
@@ -103,14 +135,43 @@ The webhook function should validate, classify, and publish — then return imme
 
 If you need to wait for a job to complete, use a Cloud Workflow with `sys.sleep` and status check steps. Cloud Functions should be stateless and short-lived.
 
+See [Testing Guide](TESTING.md) for POC deployment and workflow verification steps.
+
 ## Adding a New Workflow
 
 1. **Create the Pub/Sub topic** in Terraform (if new)
-2. **Create the workflow YAML** file (see `fabric_job_workflow.yaml` as reference)
-3. **Register the workflow** in `workflow.tf` using `google_workflows_workflow`
+2. **Create the workflow YAML** file (see `fabric_job_workflow.yaml` or `dbt_retry_workflow.yaml` as reference)
+3. **Register the workflow** in `workflow.tf` using `google_workflows_workflow` with `templatefile()`
 4. **Wire Eventarc** in `event-triggers.tf` using the `eventarc_standard/workflow` module
 5. **Update the Cloud Function** to publish to the new topic
 6. **Grant permissions** to the workflow's service account in `permissions.tf`
+
+### Terraform Gotchas
+
+**`workflow_id` must be a static string for new workflows.** The `eventarc_standard/workflow` module uses `count = length(var.workflow_id) > 0 ? 1 : 0`. If `workflow_id` references a resource that doesn't exist yet (e.g., `google_workflows_workflow.my_workflow.id`), Terraform can't resolve the count at plan time and the plan fails with `Invalid count argument`.
+
+Use a hardcoded path string instead:
+```hcl
+# WRONG — fails on first plan because the workflow doesn't exist yet
+workflow_id = google_workflows_workflow.my_workflow.id
+
+# CORRECT — static string that Terraform can evaluate at plan time
+workflow_id = "projects/${module.project.project_id}/locations/us-central1/workflows/my-workflow-name"
+```
+
+Once the workflow exists in state (after first apply), either form works. But since the first `atlantis apply` creates the workflow and the eventarc trigger together, the static string is required.
+
+**Workflow YAML uses `$${...}` for Cloud Workflows expressions.** Because `templatefile()` interprets `${...}` as Terraform interpolation, all Cloud Workflows expressions in YAML files must use the double-dollar escape: `$${variable_name}`. Terraform variables passed to the template use the normal single-dollar `${var_name}`.
+
+```yaml
+# Terraform variable (resolved by templatefile):
+url: "https://${region}-${project_id}.cloudfunctions.net/${function_name}"
+
+# Cloud Workflows expression (passed through literally):
+payload: $${json.decode(base64.decode(event.data.message.data))}
+```
+
+When testing workflow YAML directly via `gcloud workflows deploy` (not through Terraform), use single-dollar `${...}` — see [TESTING.md](TESTING.md) for details.
 
 ## Infrastructure Reference
 
@@ -123,3 +184,12 @@ If you need to wait for a job to complete, use a Cloud Workflow with `sys.sleep`
 | Eventarc triggers | `cru-terraform/.../dot/prod/event-triggers.tf` |
 | Permissions | `cru-terraform/.../dot/prod/permissions.tf` |
 | Secrets | `cru-terraform/.../dot/prod/secrets.tf` |
+
+## Pub/Sub Topics
+
+| Topic | Publisher | Consumer Workflow | Purpose |
+|-------|-----------|-------------------|---------|
+| `cloud-run-job-completed` | okta-sync, woo-sync, process-geography | cloud-run-job-dbt | Trigger dbt job after CloudRun job completes |
+| `fivetran-events` | fivetran-webhook | fivetran-dbt | Trigger dbt job after Fivetran sync completes |
+| `fabric-job-events` | dbt-webhook (on success) | fabric-job-workflow | Trigger Fabric job after dbt job succeeds |
+| `dbt-retry-events` | dbt-webhook (on failure) | dbt-retry-workflow | Retry transient dbt Cloud job failures |
