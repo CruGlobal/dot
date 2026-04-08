@@ -257,8 +257,8 @@ def test_cancelled_job_ignored(mock_publisher):
 
 
 @mock.patch.object(main, "publisher")
-def test_non_completion_event_returns_200(mock_publisher):
-    """Non-completion events (e.g., job.run.started) are ignored with 200."""
+def test_non_completion_event_returns_400(mock_publisher):
+    """Non-completion events return 400 because parse_dbt_webhook returns {} for them."""
     payload = {
         "eventType": "job.run.started",
         "accountId": "10206",
@@ -317,3 +317,49 @@ def test_pubsub_error_returns_500(mock_publisher):
 
     assert response[1] == 500
     assert "Pub/Sub" in response[0]
+
+
+# ---------------------------------------------------------------------------
+# Signature verification
+# ---------------------------------------------------------------------------
+
+
+@mock.patch.object(main, "publisher")
+def test_valid_hmac_signature_accepted(mock_publisher):
+    """Valid HMAC-SHA256 signature (non-Bearer) is accepted."""
+    import hmac as hmac_lib
+    import hashlib
+
+    mock_future = mock.Mock()
+    mock_future.result.return_value = "msg-123"
+    mock_publisher.publish.return_value = mock_future
+
+    payload = make_dbt_webhook_payload(status="Success", status_code=10)
+    body = json.dumps(payload).encode("utf-8")
+    secret = "test-secret"
+    valid_signature = hmac_lib.new(
+        secret.encode("utf-8"), body, hashlib.sha256
+    ).hexdigest()
+
+    mock_req = mock.Mock(spec=Request)
+    mock_req.get_data.return_value = body
+    mock_req.headers = {"authorization": valid_signature}
+
+    response = main.webhook_handler(mock_req)
+
+    assert response[1] == 200
+
+
+def test_invalid_hmac_signature_rejected():
+    """Invalid HMAC signature (non-Bearer, wrong value) returns 403."""
+    payload = make_dbt_webhook_payload(status="Success", status_code=10)
+    body = json.dumps(payload).encode("utf-8")
+
+    mock_req = mock.Mock(spec=Request)
+    mock_req.get_data.return_value = body
+    mock_req.headers = {"authorization": "invalid-hmac-value"}
+
+    response = main.webhook_handler(mock_req)
+
+    assert response[1] == 403
+    assert "Invalid signature" in response[0]

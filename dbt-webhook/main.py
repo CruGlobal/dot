@@ -218,6 +218,7 @@ def handle_job_failure(dbt_info: dict) -> tuple:
             message_bytes,
             job_id=dbt_info.get("job_id", ""),
             run_status=dbt_info.get("run_status", ""),
+            environment_id=dbt_info.get("environment_id", ""),
         )
         message_id = future.result(timeout=10)
 
