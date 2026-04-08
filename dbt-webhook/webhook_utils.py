@@ -58,4 +58,52 @@ def parse_dbt_webhook(payload: dict) -> dict:
         logger.exception(f"Error parsing DBT webhook payload: {str(e)}")
         return {}
 
+
+# Legacy Fabric mapping — kept for backward compatibility during parallel transition.
+# Remove after Fabric workflow migrates to dbt-job-completed topic.
+def map_dbt_to_fabric(dbt_job_id: str) -> dict:
+    dbt_to_fabric_mapping = {
+        "163545": {
+            "workspace_id": "c2bafcfd-df3d-4383-8f76-aed296260453",
+            "item_id": "457998b0-be0c-437c-9b1a-4e5f17b3bf77",
+            "refresh_workspace_id": "b3d68b22-ae01-4017-af31-1392c5c54a6c",
+            "lakehouse_dataset_id": "1402b359-a8e4-48f2-a69e-50bff4e37122",
+            "job_type": "Execute",
+        }
+    }
+
+    mapping = dbt_to_fabric_mapping.get(dbt_job_id)
+    if not mapping:
+        return {}
+
+    logger.info(
+        f"Found Fabric mapping for DBT job {dbt_job_id}: "
+        f"workspace={mapping['workspace_id']}, item={mapping['item_id']}"
+    )
+    return mapping
+
+
+def create_fabric_job_message(fabric_config: dict, dbt_info: dict) -> dict:
+    return {
+        "workspace_id": fabric_config["workspace_id"],
+        "item_id": fabric_config["item_id"],
+        "refresh_workspace_id": fabric_config["refresh_workspace_id"],
+        "lakehouse_dataset_id": fabric_config["lakehouse_dataset_id"],
+        "job_type": fabric_config["job_type"],
+        "trigger_source": "dbt_completion",
+        "enable_monitoring": True,
+        "source_job_id": dbt_info.get("job_id", ""),
+        "source_system": "dbt",
+        "execution_context": {
+            "dbt_job_id": dbt_info.get("job_id", ""),
+            "dbt_job_name": dbt_info.get("job_name", ""),
+            "dbt_run_id": dbt_info.get("run_id", ""),
+            "dbt_run_status": dbt_info.get("run_status", ""),
+            "dbt_environment_id": dbt_info.get("environment_id", ""),
+            "dbt_account_id": dbt_info.get("account_id", ""),
+            "event_type": dbt_info.get("event_type", ""),
+        },
+        "execution_data": None,
+    }
+
     return {}

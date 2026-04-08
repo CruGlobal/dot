@@ -226,6 +226,28 @@ def test_webhook_invalid_json():
 
 
 @mock.patch.object(main, "publisher")
+def test_webhook_success_with_fabric_mapping_publishes_to_both_topics(mock_publisher):
+    """Successful dbt job with Fabric mapping publishes to both topics."""
+    mock_future = mock.Mock()
+    mock_future.result.return_value = "msg-123"
+    mock_publisher.publish.return_value = mock_future
+
+    payload = make_dbt_webhook_payload(
+        status="Success", status_code=10, job_id="163545"
+    )
+    request = make_mock_request(payload)
+
+    response = main.webhook_handler(request)
+
+    assert response[1] == 200
+    assert mock_publisher.publish.call_count == 2
+
+    call_topics = [call[0][0] for call in mock_publisher.publish.call_args_list]
+    assert main.completed_topic_path in call_topics
+    assert main.fabric_topic_path in call_topics
+
+
+@mock.patch.object(main, "publisher")
 def test_webhook_pubsub_error_returns_500(mock_publisher):
     """Pub/Sub publish failure returns 500."""
     mock_publisher.publish.side_effect = Exception("Pub/Sub unavailable")

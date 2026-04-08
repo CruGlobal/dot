@@ -4,7 +4,7 @@ import logging
 import sys
 import json
 from google.cloud import pubsub_v1
-from webhook_utils import verify_dbt_signature, parse_dbt_webhook
+from webhook_utils import verify_dbt_signature, parse_dbt_webhook, map_dbt_to_fabric, create_fabric_job_message
 
 logger = logging.getLogger("primary_logger")
 logger.propagate = False
@@ -12,6 +12,7 @@ gcp_project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", None)
 dbt_webhook_secret = os.environ.get("DBT_WEBHOOK_SECRET", None)
 publisher = pubsub_v1.PublisherClient()
 completed_topic_path = publisher.topic_path(gcp_project_id, "dbt-job-completed")
+fabric_topic_path = publisher.topic_path(gcp_project_id, "fabric-job-events")
 retry_topic_path = publisher.topic_path(gcp_project_id, "dbt-retry-events")
 
 
@@ -93,8 +94,8 @@ def create_retry_message(dbt_info: dict) -> dict:
 def handle_job_success(dbt_info: dict) -> tuple:
     """
     Publish successful completion to the generic dbt-job-completed topic.
-    Includes job_id and run_status as Pub/Sub message attributes for
-    downstream subscription filtering.
+    Also publishes to legacy fabric-job-events topic if there's a Fabric mapping
+    (backward compatibility — will be removed after Fabric migrates to the new topic).
     """
     completion_message = create_completion_message(dbt_info)
 
@@ -114,6 +115,19 @@ def handle_job_success(dbt_info: dict) -> tuple:
             f"Published dbt job completion to Pub/Sub: message_id={message_id}, "
             f"job_id={dbt_info.get('job_id')}, job_name={dbt_info.get('job_name')}"
         )
+
+        # Legacy: also publish to fabric-job-events if this job has a Fabric mapping.
+        # Remove this block after Fabric workflow migrates to dbt-job-completed topic.
+        fabric_config = map_dbt_to_fabric(dbt_info.get("job_id", ""))
+        if fabric_config:
+            fabric_message = create_fabric_job_message(fabric_config, dbt_info)
+            fabric_bytes = json.dumps(fabric_message).encode("utf-8")
+            fabric_future = publisher.publish(fabric_topic_path, fabric_bytes)
+            fabric_msg_id = fabric_future.result()
+            logger.info(
+                f"Published to legacy fabric-job-events: message_id={fabric_msg_id}, "
+                f"workspace_id={fabric_config['workspace_id']}"
+            )
 
         return (
             {
