@@ -21,6 +21,16 @@ def mock_request_with_job_id():
 
 
 @pytest.fixture
+def mock_request_with_custom_cause():
+    mock_req = mock.Mock(spec=Request)
+    mock_req.get_json.return_value = {
+        "job_id": "test_job_id",
+        "cause": "Auto-retry (attempt 1): transient failure in run 12345",
+    }
+    return mock_req
+
+
+@pytest.fixture
 def mock_request_without_job_id():
     mock_req = mock.Mock(spec=Request)
     mock_req.get_json.return_value = {}
@@ -153,3 +163,49 @@ def test_trigger_dbt_job_timeout(mock_env_vars, mock_request_with_job_id, caplog
         assert any(
             "Error in making request" in msg for msg in log_messages
         ), f"Expected error message not found in logs: {log_messages}"
+
+
+@responses.activate
+def test_trigger_dbt_job_with_custom_cause(
+    mock_env_vars, mock_request_with_custom_cause, caplog
+):
+    """
+    Tests the trigger_dbt_job function passes a custom cause to the dbt API.
+    """
+    responses.add(
+        responses.POST,
+        "https://cloud.getdbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        json={"data": {"id": "retry_run_id"}},
+        status=200,
+    )
+
+    response = main.trigger_dbt_job(mock_request_with_custom_cause)
+
+    assert response[0] == "Trigger dbt job completed"
+    assert response[1] == 200
+
+    # Verify the cause was passed in the API request body (URL-encoded)
+    request_body = responses.calls[0].request.body
+    assert "Auto-retry" in request_body or "Auto+retry" in request_body
+
+
+@responses.activate
+def test_trigger_dbt_job_default_cause(mock_env_vars, mock_request_with_job_id, caplog):
+    """
+    Tests the trigger_dbt_job function uses default cause when none provided.
+    """
+    responses.add(
+        responses.POST,
+        "https://cloud.getdbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        json={"data": {"id": "default_run_id"}},
+        status=200,
+    )
+
+    response = main.trigger_dbt_job(mock_request_with_job_id)
+
+    assert response[0] == "Trigger dbt job completed"
+    assert response[1] == 200
+
+    # Verify the default cause was used (URL-encoded form data)
+    request_body = responses.calls[0].request.body
+    assert "Triggered" in request_body and "Google+Cloud+Function" in request_body

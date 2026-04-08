@@ -98,6 +98,8 @@ def trigger_dbt_job(request):
         logger.exception("Failed to retrieve job_id")
         raise
 
+    cause = request_json.get("cause", "Triggered by Google Cloud Function")
+
     dbt_token = os.environ.get("DBT_TOKEN", None).strip("\ufeff").strip()
     if not dbt_token:
         logger.exception("DBT token is missing or invalid.")
@@ -105,7 +107,7 @@ def trigger_dbt_job(request):
     account_id = "10206"
     try:
         client = DbtClient(access_token=dbt_token, account_id=account_id)
-        job_run_response = client.trigger_job(job_id)
+        job_run_response = client.trigger_job(job_id, cause=cause)
         if not job_run_response:
             logger.exception("No response received from the dbt job trigger endpoint.")
             return "Failed to trigger dbt job", 500
