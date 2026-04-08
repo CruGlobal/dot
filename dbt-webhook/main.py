@@ -1,14 +1,52 @@
+"""
+dbt Cloud Webhook Handler — Generic Event Publisher
+
+Receives webhook notifications from dbt Cloud when jobs complete.
+Publishes events to Pub/Sub topics for downstream workflow consumption.
+
+Event routing:
+  - Successful completions → dbt-job-completed topic (all downstream workflows)
+  - Failed completions → dbt-retry-events topic (automatic retry workflow)
+
+The dbt-job-completed topic is the generic fan-out point for all post-dbt
+orchestration. Downstream workflows (Fabric, Hightouch, etc.) subscribe with
+Pub/Sub attribute filters on job_id and act independently. Adding a new
+downstream integration requires only a Terraform change (new subscription +
+workflow), not a code change here.
+
+Legacy: Successful completions for jobs with a Fabric mapping also publish
+to the fabric-job-events topic for backward compatibility. This will be
+removed after the Fabric workflow migrates to the dbt-job-completed topic.
+
+Related:
+  - Terraform: cru-terraform/applications/data-warehouse/dot/prod/
+  - Design: ~/dotfiles/design-docs/design-netsuite-hightouch-orchestration.md
+  - Jira: DT-495
+"""
+
 import functions_framework
 import os
 import logging
 import sys
 import json
 from google.cloud import pubsub_v1
-from webhook_utils import verify_dbt_signature, parse_dbt_webhook, map_dbt_to_fabric, create_fabric_job_message
+from webhook_utils import (
+    verify_dbt_signature,
+    parse_dbt_webhook,
+    map_dbt_to_fabric,
+    create_fabric_job_message,
+)
 
 logger = logging.getLogger("primary_logger")
 logger.propagate = False
+
 gcp_project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", None)
+if not gcp_project_id:
+    raise EnvironmentError(
+        "GOOGLE_CLOUD_PROJECT environment variable is required. "
+        "Set it to the GCP project ID where Pub/Sub topics are created."
+    )
+
 dbt_webhook_secret = os.environ.get("DBT_WEBHOOK_SECRET", None)
 publisher = pubsub_v1.PublisherClient()
 completed_topic_path = publisher.topic_path(gcp_project_id, "dbt-job-completed")
@@ -17,9 +55,7 @@ retry_topic_path = publisher.topic_path(gcp_project_id, "dbt-retry-events")
 
 
 class CloudLoggingFormatter(logging.Formatter):
-    """
-    Produces messages compatible with google cloud logging
-    """
+    """Formats log records as JSON for Google Cloud Logging."""
 
     def format(self, record: logging.LogRecord) -> str:
         s = super().format(record)
@@ -60,8 +96,11 @@ def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
 
 def create_completion_message(dbt_info: dict) -> dict:
     """
-    Create a generic dbt job completion message for the dbt-job-completed topic.
-    Downstream workflows filter by job_id via Pub/Sub attribute filters.
+    Build the message payload for the dbt-job-completed Pub/Sub topic.
+
+    This message is consumed by all downstream workflows. Include every field
+    that any consumer might need — adding fields later requires coordinating
+    with all subscribers.
     """
     return {
         "job_id": dbt_info.get("job_id", ""),
@@ -69,6 +108,7 @@ def create_completion_message(dbt_info: dict) -> dict:
         "run_id": dbt_info.get("run_id", ""),
         "run_status": dbt_info.get("run_status", ""),
         "run_status_code": dbt_info.get("run_status_code", ""),
+        "run_status_humanized": dbt_info.get("run_status_humanized", ""),
         "environment_id": dbt_info.get("environment_id", ""),
         "account_id": dbt_info.get("account_id", ""),
         "event_type": dbt_info.get("event_type", ""),
@@ -77,7 +117,10 @@ def create_completion_message(dbt_info: dict) -> dict:
 
 def create_retry_message(dbt_info: dict) -> dict:
     """
-    Create a retry event message for a failed dbt job.
+    Build the message payload for the dbt-retry-events Pub/Sub topic.
+
+    The attempt_number starts at 0 here. The dbt-retry-workflow increments it
+    on each retry attempt and re-publishes if retries are exhausted.
     """
     return {
         "job_id": dbt_info.get("job_id", ""),
@@ -93,9 +136,12 @@ def create_retry_message(dbt_info: dict) -> dict:
 
 def handle_job_success(dbt_info: dict) -> tuple:
     """
-    Publish successful completion to the generic dbt-job-completed topic.
-    Also publishes to legacy fabric-job-events topic if there's a Fabric mapping
-    (backward compatibility — will be removed after Fabric migrates to the new topic).
+    Publish successful completion to the generic dbt-job-completed topic,
+    then optionally to the legacy fabric-job-events topic if there's a mapping.
+
+    The Fabric publish is isolated in its own try/except so a Fabric failure
+    does not cause a 500 response or trigger a dbt Cloud webhook retry (which
+    would duplicate the message on dbt-job-completed).
     """
     completion_message = create_completion_message(dbt_info)
 
@@ -108,41 +154,49 @@ def handle_job_success(dbt_info: dict) -> tuple:
             message_bytes,
             job_id=dbt_info.get("job_id", ""),
             run_status=dbt_info.get("run_status", ""),
+            environment_id=dbt_info.get("environment_id", ""),
         )
-        message_id = future.result()
+        message_id = future.result(timeout=10)
 
         logger.info(
             f"Published dbt job completion to Pub/Sub: message_id={message_id}, "
             f"job_id={dbt_info.get('job_id')}, job_name={dbt_info.get('job_name')}"
         )
 
-        # Legacy: also publish to fabric-job-events if this job has a Fabric mapping.
-        # Remove this block after Fabric workflow migrates to dbt-job-completed topic.
-        fabric_config = map_dbt_to_fabric(dbt_info.get("job_id", ""))
-        if fabric_config:
+    except Exception as e:
+        logger.exception(f"Error publishing to dbt-job-completed: {str(e)}")
+        return (f"Error publishing to Pub/Sub: {str(e)}", 500)
+
+    # Legacy: also publish to fabric-job-events if this job has a Fabric mapping.
+    # This block is isolated so a Fabric failure does not affect the primary
+    # publish result or trigger a webhook retry.
+    # Remove this block after Fabric workflow migrates to dbt-job-completed topic.
+    fabric_config = map_dbt_to_fabric(dbt_info.get("job_id", ""))
+    if fabric_config:
+        try:
             fabric_message = create_fabric_job_message(fabric_config, dbt_info)
             fabric_bytes = json.dumps(fabric_message).encode("utf-8")
             fabric_future = publisher.publish(fabric_topic_path, fabric_bytes)
-            fabric_msg_id = fabric_future.result()
+            fabric_msg_id = fabric_future.result(timeout=10)
             logger.info(
                 f"Published to legacy fabric-job-events: message_id={fabric_msg_id}, "
                 f"workspace_id={fabric_config['workspace_id']}"
             )
+        except Exception as e:
+            logger.exception(
+                f"Error publishing to legacy fabric-job-events (non-fatal): {str(e)}"
+            )
 
-        return (
-            {
-                "status": "success",
-                "message": "Job completion published to dbt-job-completed topic",
-                "message_id": message_id,
-                "dbt_job_id": dbt_info.get("job_id"),
-                "dbt_run_id": dbt_info.get("run_id"),
-            },
-            200,
-        )
-
-    except Exception as e:
-        logger.exception(f"Error publishing to Pub/Sub: {str(e)}")
-        return (f"Error publishing to Pub/Sub: {str(e)}", 500)
+    return (
+        {
+            "status": "success",
+            "message": "Job completion published to dbt-job-completed topic",
+            "message_id": message_id,
+            "dbt_job_id": dbt_info.get("job_id"),
+            "dbt_run_id": dbt_info.get("run_id"),
+        },
+        200,
+    )
 
 
 def handle_job_failure(dbt_info: dict) -> tuple:
@@ -159,8 +213,13 @@ def handle_job_failure(dbt_info: dict) -> tuple:
         message_json = json.dumps(retry_message)
         message_bytes = message_json.encode("utf-8")
 
-        future = publisher.publish(retry_topic_path, message_bytes)
-        message_id = future.result()
+        future = publisher.publish(
+            retry_topic_path,
+            message_bytes,
+            job_id=dbt_info.get("job_id", ""),
+            run_status=dbt_info.get("run_status", ""),
+        )
+        message_id = future.result(timeout=10)
 
         logger.info(
             f"Published retry event to Pub/Sub: message_id={message_id}, "
@@ -186,11 +245,16 @@ def handle_job_failure(dbt_info: dict) -> tuple:
 @functions_framework.http
 def webhook_handler(request):
     """
-    Generic dbt Cloud webhook handler.
-    Publishes all successful completions to dbt-job-completed topic with job_id
-    as a message attribute. Downstream workflows (Fabric, Hightouch, etc.)
-    subscribe with attribute filters and act independently.
-    Publishes failures to dbt-retry-events topic for automatic retry.
+    HTTP Cloud Function entry point for dbt Cloud webhooks.
+
+    Receives job completion notifications and routes them:
+      - Success → dbt-job-completed topic (+ legacy fabric-job-events if mapped)
+      - Failure → dbt-retry-events topic
+      - Cancelled/other → logged and ignored (200 response)
+
+    dbt Cloud sends webhooks with JWT Bearer tokens in the Authorization header.
+    The dbt Cloud webhook should be configured at the account level with an empty
+    job list so ALL job completions are received.
     """
     setup_logging()
 
@@ -214,7 +278,6 @@ def webhook_handler(request):
             return ("Invalid JSON", 400)
 
         dbt_info = parse_dbt_webhook(request_json)
-        logger.info(f"Parsed DBT info: {dbt_info}")
         if not dbt_info:
             logger.error("Failed to parse DBT webhook payload")
             return ("Invalid DBT webhook payload", 400)
@@ -231,6 +294,8 @@ def webhook_handler(request):
             )
             return ("Event ignored - not a job completion", 200)
 
+        # Route by status. Status code is authoritative; string is a fallback
+        # for resilience in case the payload format changes.
         run_status_code = dbt_info.get("run_status_code")
 
         if run_status_code == 20 or dbt_info.get("run_status") == "Error":

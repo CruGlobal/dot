@@ -1,3 +1,12 @@
+"""
+Utility functions for the dbt Cloud webhook handler.
+
+Contains:
+  - Webhook signature verification
+  - Payload parsing
+  - Legacy Fabric job mapping (temporary, for parallel transition)
+"""
+
 import hmac
 import hashlib
 import logging
@@ -7,8 +16,17 @@ logger = logging.getLogger("primary_logger")
 
 def verify_dbt_signature(request_body: bytes, signature: str, secret: str) -> bool:
     """
-    Verify DBT Cloud webhook authentication.
-    DBT Cloud sends JWT Bearer tokens in Authorization header.
+    Verify dbt Cloud webhook authentication.
+
+    dbt Cloud sends JWT Bearer tokens in the Authorization header. This function
+    accepts any Bearer token without validating the JWT signature — dbt Cloud is
+    trusted at the network layer (Cloud Function is not publicly discoverable).
+
+    For non-Bearer signatures, falls back to HMAC-SHA256 validation for
+    compatibility with older webhook configurations.
+
+    Known limitation: The Bearer path does not verify token content. If stricter
+    auth is needed, add PyJWT validation or compare against the webhook secret.
     """
     if not signature:
         logger.warning("Missing authorization header for DBT webhook verification")
@@ -35,7 +53,14 @@ def verify_dbt_signature(request_body: bytes, signature: str, secret: str) -> bo
 
 def parse_dbt_webhook(payload: dict) -> dict:
     """
-    Parse DBT Cloud webhook payload and extract relevant information.
+    Parse dbt Cloud webhook payload and extract relevant fields.
+
+    Only processes job.run.completed events. Returns an empty dict for all
+    other event types (the caller checks event_type to decide how to handle).
+
+    Returns:
+        dict: Parsed fields if event type is job.run.completed, empty dict otherwise.
+        Never returns None.
     """
     try:
         event_type = payload.get("eventType", "")
@@ -54,14 +79,26 @@ def parse_dbt_webhook(payload: dict) -> dict:
                 "account_id": str(payload.get("accountId", "")),
             }
 
+        return {}
+
     except Exception as e:
         logger.exception(f"Error parsing DBT webhook payload: {str(e)}")
         return {}
 
 
-# Legacy Fabric mapping — kept for backward compatibility during parallel transition.
-# Remove after Fabric workflow migrates to dbt-job-completed topic.
+# ---------------------------------------------------------------------------
+# Legacy Fabric mapping — kept for backward compatibility during parallel
+# transition. Remove after Fabric workflow migrates to dbt-job-completed topic.
+# ---------------------------------------------------------------------------
+
 def map_dbt_to_fabric(dbt_job_id: str) -> dict:
+    """
+    Map a dbt job ID to Fabric workspace and item configuration.
+
+    Returns the Fabric config dict if the job has a mapping, empty dict otherwise.
+    This mapping will be removed when the Fabric workflow subscribes to the
+    dbt-job-completed topic with a Pub/Sub attribute filter instead.
+    """
     dbt_to_fabric_mapping = {
         "163545": {
             "workspace_id": "c2bafcfd-df3d-4383-8f76-aed296260453",
@@ -84,6 +121,11 @@ def map_dbt_to_fabric(dbt_job_id: str) -> dict:
 
 
 def create_fabric_job_message(fabric_config: dict, dbt_info: dict) -> dict:
+    """
+    Build the message payload for the legacy fabric-job-events topic.
+
+    This message format is consumed by the fabric-job-workflow in Cloud Workflows.
+    """
     return {
         "workspace_id": fabric_config["workspace_id"],
         "item_id": fabric_config["item_id"],
@@ -105,5 +147,3 @@ def create_fabric_job_message(fabric_config: dict, dbt_info: dict) -> dict:
         },
         "execution_data": None,
     }
-
-    return {}

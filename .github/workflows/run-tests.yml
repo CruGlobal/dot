@@ -27,11 +27,12 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
           else
-            CHANGED=$(git diff --name-only HEAD~1)
+            CHANGED=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
           fi
 
           FUNCTIONS='[]'
-          for dir in dbt-trigger dbt-webhook fivetran-trigger okta-sync process-geography woo-sync; do
+          for dir in */; do
+            dir="${dir%/}"
             if echo "$CHANGED" | grep -q "^${dir}/" && [ -f "${dir}/main_test.py" ]; then
               FUNCTIONS=$(echo "$FUNCTIONS" | jq --arg d "$dir" '. + [$d]')
             fi
