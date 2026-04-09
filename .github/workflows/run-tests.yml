@@ -27,7 +27,13 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
           else
-            CHANGED=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
+            BEFORE="${{ github.event.before }}"
+            if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              # First push to branch — compare against parent commit
+              CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git show --name-only --pretty="" HEAD)
+            else
+              CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}")
+            fi
           fi
 
           FUNCTIONS='[]'
@@ -69,4 +75,4 @@ jobs:
       - name: Run tests
         run: |
           cd ${{ matrix.function }}
-          pytest -v main_test.py
+          pytest -v

@@ -18,15 +18,11 @@ def verify_dbt_signature(request_body: bytes, signature: str, secret: str) -> bo
     """
     Verify dbt Cloud webhook authentication.
 
-    dbt Cloud sends JWT Bearer tokens in the Authorization header. This function
-    accepts any Bearer token without validating the JWT signature — dbt Cloud is
-    trusted at the network layer (Cloud Function is not publicly discoverable).
+    dbt Cloud sends a Bearer token in the Authorization header. We validate it
+    against the configured webhook secret using constant-time comparison.
 
     For non-Bearer signatures, falls back to HMAC-SHA256 validation for
     compatibility with older webhook configurations.
-
-    Known limitation: The Bearer path does not verify token content. If stricter
-    auth is needed, add PyJWT validation or compare against the webhook secret.
     """
     if not signature:
         logger.warning("Missing authorization header for DBT webhook verification")
@@ -34,14 +30,21 @@ def verify_dbt_signature(request_body: bytes, signature: str, secret: str) -> bo
 
     try:
         if signature.startswith("Bearer "):
-            logger.info("Valid JWT Bearer token received from DBT Cloud")
-            return True
+            token = signature[len("Bearer "):]
+            if not secret:
+                logger.warning("No webhook secret configured — cannot validate Bearer token")
+                return False
+            if hmac.compare_digest(token, secret):
+                logger.info("Bearer token validated successfully")
+                return True
+            logger.warning("Bearer token does not match webhook secret")
+            return False
 
         computed_hmac = hmac.new(
             secret.encode("utf-8"), request_body, hashlib.sha256
         ).hexdigest()
 
-        signature_valid = computed_hmac == signature
+        signature_valid = hmac.compare_digest(computed_hmac, signature)
         logger.debug(f"HMAC signature validation result: {signature_valid}")
 
         return signature_valid
@@ -55,15 +58,18 @@ def parse_dbt_webhook(payload: dict) -> dict:
     """
     Parse dbt Cloud webhook payload and extract relevant fields.
 
-    Only processes job.run.completed events. Returns an empty dict for all
-    other event types (the caller checks event_type to decide how to handle).
+    Returns a dict with at minimum 'event_type' for ALL event types, so the
+    caller can distinguish between a bad payload (empty dict) and a valid
+    non-completion event (dict with event_type but no other fields).
 
     Returns:
-        dict: Parsed fields if event type is job.run.completed, empty dict otherwise.
-        Never returns None.
+        dict: Parsed fields. Empty dict only on parse failure.
     """
     try:
         event_type = payload.get("eventType", "")
+        if not event_type:
+            return {}
+
         data = payload.get("data", {})
 
         if event_type == "job.run.completed":
@@ -73,13 +79,14 @@ def parse_dbt_webhook(payload: dict) -> dict:
                 "job_name": data.get("jobName", ""),
                 "run_id": str(data.get("runId", "")),
                 "run_status": data.get("runStatus", ""),
-                "run_status_code": data.get("runStatusCode", ""),
+                "run_status_code": int(data.get("runStatusCode", 0)),
                 "run_status_humanized": data.get("runStatusMessage", ""),
                 "environment_id": str(data.get("environmentId", "")),
                 "account_id": str(payload.get("accountId", "")),
             }
 
-        return {}
+        # Non-completion event — return event_type so caller can return 200
+        return {"event_type": event_type}
 
     except Exception as e:
         logger.exception(f"Error parsing DBT webhook payload: {str(e)}")

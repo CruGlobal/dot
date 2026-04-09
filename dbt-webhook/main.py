@@ -144,6 +144,7 @@ def handle_job_success(dbt_info: dict) -> tuple:
     would duplicate the message on dbt-job-completed).
     """
     completion_message = create_completion_message(dbt_info)
+    message_id = None
 
     try:
         message_json = json.dumps(completion_message)
@@ -176,7 +177,11 @@ def handle_job_success(dbt_info: dict) -> tuple:
         try:
             fabric_message = create_fabric_job_message(fabric_config, dbt_info)
             fabric_bytes = json.dumps(fabric_message).encode("utf-8")
-            fabric_future = publisher.publish(fabric_topic_path, fabric_bytes)
+            fabric_future = publisher.publish(
+                fabric_topic_path,
+                fabric_bytes,
+                job_id=dbt_info.get("job_id", ""),
+            )
             fabric_msg_id = fabric_future.result(timeout=10)
             logger.info(
                 f"Published to legacy fabric-job-events: message_id={fabric_msg_id}, "

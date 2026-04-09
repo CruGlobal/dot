@@ -56,8 +56,9 @@ def make_dbt_webhook_payload(status="Success", status_code=10, job_id="54170"):
     }
 
 
-def make_mock_request(payload, signature="Bearer test-token"):
-    """Build a mock Flask request with the given payload and auth header."""
+def make_mock_request(payload, signature="Bearer test-secret"):
+    """Build a mock Flask request with the given payload and auth header.
+    Default signature uses the test-secret configured in conftest.py."""
     mock_req = mock.Mock(spec=Request)
     body = json.dumps(payload).encode("utf-8")
     mock_req.get_data.return_value = body
@@ -257,8 +258,8 @@ def test_cancelled_job_ignored(mock_publisher):
 
 
 @mock.patch.object(main, "publisher")
-def test_non_completion_event_returns_400(mock_publisher):
-    """Non-completion events return 400 because parse_dbt_webhook returns {} for them."""
+def test_non_completion_event_returns_200(mock_publisher):
+    """Non-completion events (e.g., job.run.started) are gracefully ignored with 200."""
     payload = {
         "eventType": "job.run.started",
         "accountId": "10206",
@@ -268,11 +269,8 @@ def test_non_completion_event_returns_400(mock_publisher):
 
     response = main.webhook_handler(request)
 
-    # parse_dbt_webhook returns {} for non-completion events,
-    # which is falsy and triggers the "Invalid payload" 400.
-    # This is acceptable because dbt Cloud only sends completion webhooks
-    # when configured correctly.
-    assert response[1] == 400
+    assert response[1] == 200
+    assert "not a job completion" in response[0]
     mock_publisher.publish.assert_not_called()
 
 
@@ -297,7 +295,7 @@ def test_invalid_json_returns_400():
     """Request with invalid JSON returns 400."""
     mock_req = mock.Mock(spec=Request)
     mock_req.get_data.return_value = b"not json"
-    mock_req.headers = {"authorization": "Bearer test-token"}
+    mock_req.headers = {"authorization": "Bearer test-secret"}
 
     response = main.webhook_handler(mock_req)
 
@@ -348,6 +346,17 @@ def test_valid_hmac_signature_accepted(mock_publisher):
     response = main.webhook_handler(mock_req)
 
     assert response[1] == 200
+
+
+def test_invalid_bearer_token_rejected():
+    """Bearer token that doesn't match webhook secret returns 403."""
+    payload = make_dbt_webhook_payload(status="Success", status_code=10)
+    request = make_mock_request(payload, signature="Bearer wrong-secret")
+
+    response = main.webhook_handler(request)
+
+    assert response[1] == 403
+    assert "Invalid signature" in response[0]
 
 
 def test_invalid_hmac_signature_rejected():
