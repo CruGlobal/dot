@@ -65,6 +65,21 @@ gcloud functions deploy fivetran-trigger --source=. --entry-point=hello_http --r
 ```
 
 
+## Environments
+
+| Environment | GCP Project | Code Branch | Purpose |
+|-------------|------------|-------------|---------|
+| **prod** | `cru-data-orchestration-prod` | `main` | All production AND staging data pipelines. This is where all real orchestration runs. |
+| **stage** | `cru-data-orchestration-stage` | `staging` | Infrastructure health check only. Not used for data pipelines. |
+| **poc** | `cru-data-orchestration-poc` | `poc` | Developer sandbox for testing new functions and workflows. |
+
+All data pipelines — including those that process staging source data — are orchestrated from the
+**prod** project. The prod environment routes to the correct dbt Cloud jobs and environments based on
+job IDs and configuration. The stage project does not run data pipelines.
+
+Terraform for prod and stage is managed via Atlantis in the
+[cru-terraform repo](https://github.com/CruGlobal/cru-terraform/tree/master/applications/data-warehouse/dot).
+
 ## POC environment infrastructure
 
 The POC environment is contained within the [cru-data-orchestration-poc](https://console.cloud.google.com/welcome?project=cru-data-orchestration-poc) GCP project.

@@ -1,0 +1,78 @@
+name: Run Tests
+
+on:
+  pull_request:
+    paths:
+      - '**/*.py'
+      - '**/requirements*.txt'
+  push:
+    branches: [main]
+    paths:
+      - '**/*.py'
+      - '**/requirements*.txt'
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      functions: ${{ steps.changed.outputs.functions }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed functions with tests
+        id: changed
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          else
+            BEFORE="${{ github.event.before }}"
+            if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              # First push to branch — compare against parent commit
+              CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git show --name-only --pretty="" HEAD)
+            else
+              CHANGED=$(git diff --name-only "$BEFORE" "${{ github.sha }}")
+            fi
+          fi
+
+          FUNCTIONS='[]'
+          for dir in */; do
+            dir="${dir%/}"
+            if echo "$CHANGED" | grep -q "^${dir}/" && [ -f "${dir}/main_test.py" ]; then
+              FUNCTIONS=$(echo "$FUNCTIONS" | jq -c --arg d "$dir" '. + [$d]')
+            fi
+          done
+
+          echo "functions=$FUNCTIONS" >> "$GITHUB_OUTPUT"
+          echo "Will test: $FUNCTIONS"
+
+  test:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.functions != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        function: ${{ fromJson(needs.detect-changes.outputs.functions) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          cd ${{ matrix.function }}
+          pip install -r requirements.txt
+          if [ -f requirements-test.txt ]; then
+            pip install -r requirements-test.txt
+          else
+            pip install pytest pytest-mock flask
+          fi
+
+      - name: Run tests
+        run: |
+          cd ${{ matrix.function }}
+          pytest -v
