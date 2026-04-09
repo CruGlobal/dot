@@ -34,7 +34,7 @@ jobs:
           for dir in */; do
             dir="${dir%/}"
             if echo "$CHANGED" | grep -q "^${dir}/" && [ -f "${dir}/main_test.py" ]; then
-              FUNCTIONS=$(echo "$FUNCTIONS" | jq --arg d "$dir" '. + [$d]')
+              FUNCTIONS=$(echo "$FUNCTIONS" | jq -c --arg d "$dir" '. + [$d]')
             fi
           done
 
