@@ -29,33 +29,30 @@ Run unit tests with pytest:
  * `pytest`
 
 
-## Deploy new secrets manually:
-The env.example file describes the env vars.
-They are all deployed as GCP secrets.
-(It probably makes sense to use pure ENV vars for non-secret config,
-but we don't support that yet.)
+## Secrets
 
-All secrets are deployed manually by developers.
-Devs have access to write secrets, but don't have access to read them
-(except possibly in the POC environment).
+Secrets are managed in two steps:
 
-First, set up the appropriate environment's GCP project, for example:
-```bash
-gcloud config set project cru-data-orchestration-poc
-```
+**Step 1: Create the secret resource (Terraform)**
 
-The secret name is the function name concatenated with an underscore and then with
-the env variable name. For example:
-```bash
-echo -n "123shhhhh456" | gcloud secrets versions add fivetran-trigger_API_SECRET --data-file=-
-```
-Instead of `echo`, you may want to use a cli for your password manager.
-Or on a mac, you can use `pbpaste` to paste the contents of your clipboard,
-after you've clicked a 'copy' button in your password manager.
+Secret resources are created in [cru-terraform](https://github.com/CruGlobal/cru-terraform/tree/master/applications/data-warehouse/dot) — each function or workflow defines its secrets in its Terraform module. The naming convention is `{function-or-workflow-name}_{ENV_VAR_NAME}` (e.g., `dbt-trigger_DBT_TOKEN`, `hightouch-workflow_HT_KEY`).
 
-Creating a new secret version does not automatically take effect.
-You'll need to trigger a new deployment.
-See below, except ignore the advice about "only doing this in the POC env".
+Terraform creates the empty secret resource — it does NOT contain the actual value.
+
+**Step 2: Add the secret value (manual, by developer)**
+
+After Terraform creates the secret, add the value via the GCP Console or CLI:
+
+- **GCP Console**: [Secret Manager](https://console.cloud.google.com/security/secret-manager?project=cru-data-orchestration-prod) → find the secret → Add New Version → paste the value
+- **CLI**:
+  ```bash
+  gcloud config set project cru-data-orchestration-prod
+  echo -n "the-actual-secret-value" | gcloud secrets versions add {secret-name} --data-file=-
+  ```
+
+Devs in the `dps-gcp-role-data-engineers@cru.org` group have access to write secret values but not read them (except in POC).
+
+**Important:** Creating a new secret version does not automatically take effect. You'll need to trigger a new deployment (push to `main` for prod, `staging` for stage).
 
 ## Deploy new code manually:
 You probably should only be doing this in the POC env.
