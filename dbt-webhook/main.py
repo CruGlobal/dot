@@ -23,6 +23,7 @@ Related:
   - Design: ~/dotfiles/design-docs/design-netsuite-hightouch-orchestration.md
   - Jira: DT-495
   - Secrets: dbt-webhook_DBT_WEBHOOK_SECRET in Secret Manager (cru-data-orchestration-prod)
+  - Runbook: docs/ARCHITECTURE.md (Manual Trigger Runbook section)
 """
 
 import functions_framework
