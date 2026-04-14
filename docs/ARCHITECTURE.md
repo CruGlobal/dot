@@ -101,6 +101,33 @@ Pub/Sub topic: dbt-retry-events
 - **run_results.json fetch** — the workflow fetches artifacts to classify failures. If artifacts aren't available (setup/compile failure), the job is still retried since those are often transient.
 - **Uses dbt-trigger SA** — the retry workflow runs as the dbt-trigger service account, which already has permissions to trigger dbt jobs and access the DBT_TOKEN secret.
 
+### dbt → Hightouch → MPDX (Webhook → Pub/Sub → Hightouch API → Webhook)
+
+```
+dbt Cloud job completes successfully (NetSuite jobs: 1032903 prod, 1032904 beta-prod)
+  → POST to dbt-webhook Cloud Function
+    → verify signature, parse payload
+    → publish to Pub/Sub topic: dbt-job-completed
+    → return 200 immediately
+
+Pub/Sub topic: dbt-job-completed
+  → Eventarc → Cloud Workflow (hightouch-workflow)
+    → check job_id matches [1032903, 1032904] — exit if no match
+    → resolve config: prod job → prod sequence, beta-prod job → stage sequence
+    → fetch Hightouch API key from Secret Manager
+    → trigger Hightouch sync sequence (POST to Hightouch API)
+    → poll for completion with exponential backoff (30s → 300s, max 60 polls)
+    → publish completion to Pub/Sub topic: hightouch-completed
+
+Pub/Sub topic: hightouch-completed
+  → Eventarc → Cloud Workflow (mpdx-webhook-workflow)
+    → resolve environment (prod/stage) from payload
+    → fetch webhook URL from Secret Manager
+    → call MPDX webhook (GET request)
+```
+
+**Note:** The dbt-webhook CF publishes ALL successful completions to `dbt-job-completed`. The hightouch-workflow filters by job_id in its first step and exits early for non-matching jobs.
+
 ## Anti-Patterns
 
 ### Do NOT use Cloud Tasks for delayed retries
@@ -191,5 +218,96 @@ When testing workflow YAML directly via `gcloud workflows deploy` (not through T
 |-------|-----------|-------------------|---------|
 | `cloud-run-job-completed` | okta-sync, woo-sync, process-geography | cloud-run-job-dbt | Trigger dbt job after CloudRun job completes |
 | `fivetran-events` | fivetran-webhook | fivetran-dbt | Trigger dbt job after Fivetran sync completes |
-| `fabric-job-events` | dbt-webhook (on success) | fabric-job-workflow | Trigger Fabric job after dbt job succeeds |
+| `dbt-job-completed` | dbt-webhook (on success) | hightouch-workflow | Generic fan-out for all post-dbt orchestration |
+| `fabric-job-events` | dbt-webhook (on success, legacy for job 163545) | fabric-job-workflow | Trigger Fabric job after US Donations dbt job succeeds |
+| `hightouch-completed` | hightouch-workflow | mpdx-webhook-workflow | Trigger MPDX webhook after Hightouch sync completes |
 | `dbt-retry-events` | dbt-webhook (on failure) | dbt-retry-workflow | Retry transient dbt Cloud job failures |
+
+## Secrets
+
+All secrets are stored in GCP Secret Manager in project `cru-data-orchestration-prod`. Terraform creates the secret resources; values are added manually via the GCP Console or `gcloud secrets versions add`.
+
+| Secret Name | Purpose | 1Password |
+|-------------|---------|-----------|
+| `dbt-webhook_DBT_WEBHOOK_SECRET` | dbt Cloud webhook signing key — must match the key configured in dbt Cloud webhooks | [1Password](https://start.1password.com/open/i?a=JYIIWWYNKNGGFKU535Y2OR2DOE&v=dhvopdqasf4myknupv5egnktui&i=iwbonr5ku3c5x5ktn2bxuiuu2m&h=cru-data-team.1password.com) |
+| `hightouch-workflow_API_KEY` | Hightouch API Bearer token for triggering sync sequences | [1Password](https://start.1password.com/open/i?a=JYIIWWYNKNGGFKU535Y2OR2DOE&v=dhvopdqasf4myknupv5egnktui&i=wnn3jvjm5cjblksxog3xjhlb5q&h=cru-data-team.1password.com) |
+| `mpdx-webhook_URL_PROD` | MPDX production webhook URL (called after Hightouch sync completes) | [1Password](https://start.1password.com/open/i?a=JYIIWWYNKNGGFKU535Y2OR2DOE&v=dhvopdqasf4myknupv5egnktui&i=lav6dc7lszmaccvmfhd22otqpq&h=cru-data-team.1password.com) |
+| `mpdx-webhook_URL_STAGE` | MPDX stage webhook URL | [1Password](https://start.1password.com/open/i?a=JYIIWWYNKNGGFKU535Y2OR2DOE&v=dhvopdqasf4myknupv5egnktui&i=5fujvlyilt6ucudxdc2qvohvoa&h=cru-data-team.1password.com) |
+| `fabric-workflow_AZURE_CLIENT_ID` | Azure service principal client ID for Fabric API | Secret Manager only |
+| `fabric-workflow_AZURE_CLIENT_SECRET` | Azure service principal client secret for Fabric API | Secret Manager only |
+| `fabric-workflow_AZURE_TENANT_ID` | Azure tenant ID for Fabric API | Secret Manager only |
+
+**Important:** When rotating a secret, add a new version in Secret Manager, then **redeploy the Cloud Function** (push any change to the function's folder on `main`) to pick up the new value. Running instances cache the secret at startup.
+
+## Manual Trigger Runbook
+
+Sometimes you need to trigger a downstream workflow without running the full upstream dbt job (e.g., recovering from an outage, testing after secret rotation).
+
+### Trigger via dbt-webhook (simulates a dbt Cloud completion)
+
+This sends a POST to the dbt-webhook Cloud Function as if dbt Cloud sent it. The function validates the signing key, publishes to the appropriate Pub/Sub topics, and all downstream workflows fire normally.
+
+**Prerequisites:**
+- The `DBT_WEBHOOK_SECRET` from 1Password or Secret Manager
+- The webhook endpoint URL: `https://dbt-webhook-handler-gateway-6sk89xvx.uc.gateway.dev/dbt-webhook`
+
+**Trigger Fabric (US Donations, job 163545):**
+```bash
+curl -s -X POST "https://dbt-webhook-handler-gateway-6sk89xvx.uc.gateway.dev/dbt-webhook" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <DBT_WEBHOOK_SECRET>" \
+  -d '{
+    "eventType": "job.run.completed",
+    "accountId": "10206",
+    "data": {
+      "jobId": "163545",
+      "jobName": "US Donations",
+      "runId": "0",
+      "runStatus": "Success",
+      "runStatusCode": 10,
+      "runStatusMessage": "Success",
+      "environmentId": "0"
+    }
+  }'
+```
+
+**Trigger Hightouch → MPDX (NetSuite prod, job 1032903):**
+```bash
+curl -s -X POST "https://dbt-webhook-handler-gateway-6sk89xvx.uc.gateway.dev/dbt-webhook" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <DBT_WEBHOOK_SECRET>" \
+  -d '{
+    "eventType": "job.run.completed",
+    "accountId": "10206",
+    "data": {
+      "jobId": "1032903",
+      "jobName": "NetSuite for MPDX",
+      "runId": "0",
+      "runStatus": "Success",
+      "runStatusCode": 10,
+      "runStatusMessage": "Success",
+      "environmentId": "0"
+    }
+  }'
+```
+
+**Trigger Hightouch → MPDX (NetSuite beta-prod, job 1032904):**
+```bash
+# Same as above but with jobId "1032904" — triggers stage Hightouch sequence
+```
+
+Replace `<DBT_WEBHOOK_SECRET>` with the signing key from 1Password.
+
+### After Secret Rotation
+
+When you update a secret in Secret Manager, the running Cloud Function instances still hold the old value in memory. To pick up the new secret:
+
+1. Push any change to the function's folder on `main` in the dot repo (triggers GHA auto-deploy)
+2. Or ask someone with `run.services.update` permission to restart the Cloud Run service
+3. Or wait for all instances to scale to zero (happens after a period of no traffic)
+
+### Verifying the Trigger Worked
+
+1. **Cloud Logging** in `cru-data-orchestration-prod` — filter: `resource.type="cloud_run_revision" resource.labels.service_name="dbt-webhook"`. Look for `200` responses.
+2. **Cloud Workflows** — check the relevant workflow's Executions tab for a new execution.
+3. A `200` response from the curl means the webhook was accepted and published to Pub/Sub. Downstream workflow execution is asynchronous.

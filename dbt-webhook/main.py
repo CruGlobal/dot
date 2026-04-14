@@ -22,6 +22,7 @@ Related:
   - Terraform: cru-terraform/applications/data-warehouse/dot/prod/
   - Design: ~/dotfiles/design-docs/design-netsuite-hightouch-orchestration.md
   - Jira: DT-495
+  - Secrets: dbt-webhook_DBT_WEBHOOK_SECRET in Secret Manager (cru-data-orchestration-prod)
 """
 
 import functions_framework
