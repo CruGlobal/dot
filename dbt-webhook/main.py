@@ -27,8 +27,6 @@ Related:
 """
 
 import functions_framework
-import hashlib
-import hmac
 import os
 import logging
 import sys
@@ -275,14 +273,6 @@ def webhook_handler(request):
         if not signature:
             logger.warning("Missing DBT signature header")
             return ("Missing signature", 400)
-
-        # Debug logging for signature validation (remove after confirming auth works)
-        logger.info(f"Auth header (first 10 chars): {signature[:10] if signature else 'None'}...")
-        logger.info(f"Auth header starts with Bearer: {signature.startswith('Bearer ') if signature else False}")
-        logger.info(f"Secret loaded (length): {len(dbt_webhook_secret) if dbt_webhook_secret else 0}")
-        logger.info(f"Request body length: {len(request_body)}")
-        computed = hmac.new(dbt_webhook_secret.encode("utf-8"), request_body, hashlib.sha256).hexdigest() if dbt_webhook_secret else "no-secret"
-        logger.info(f"Computed HMAC (first 10 chars): {computed[:10]}...")
 
         if not verify_dbt_signature(request_body, signature, dbt_webhook_secret):
             logger.error("Invalid DBT webhook signature")
