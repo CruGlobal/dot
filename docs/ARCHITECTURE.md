@@ -200,6 +200,22 @@ payload: $${json.decode(base64.decode(event.data.message.data))}
 
 When testing workflow YAML directly via `gcloud workflows deploy` (not through Terraform), use single-dollar `${...}` — see [TESTING.md](TESTING.md) for details.
 
+### API Gateway Gotchas
+
+**The gateway hostname does NOT match the Terraform output pattern.** The `dbt_gateway_url` Terraform output uses the pattern `<gateway-id>-<region>.gateway.dev` (e.g., `dbt-webhook-handler-gateway-us-central1.gateway.dev`). But the actual deployed hostname includes a random suffix: `dbt-webhook-handler-gateway-6sk89xvx.uc.gateway.dev`. Always get the real hostname from:
+
+```bash
+gcloud api-gateway gateways describe dbt-webhook-handler-gateway \
+  --location=us-central1 --project=cru-data-orchestration-prod \
+  --format='value(defaultHostname)'
+```
+
+Using the Terraform output pattern instead of the actual hostname will return 404. This applies to any URL configured externally (dbt Cloud webhooks, documentation, manual trigger scripts).
+
+**Current gateway hostnames:**
+- dbt-webhook: `dbt-webhook-handler-gateway-6sk89xvx.uc.gateway.dev`
+- fivetran-webhook: `fivetran-webhook-handler-gateway-6sk89xvx.uc.gateway.dev`
+
 ## Infrastructure Reference
 
 | Component | Location |
