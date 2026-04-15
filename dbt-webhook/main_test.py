@@ -348,15 +348,15 @@ def test_valid_hmac_signature_accepted(mock_publisher):
     assert response[1] == 200
 
 
-def test_invalid_bearer_token_rejected():
-    """Bearer token that doesn't match webhook secret returns 403."""
+def test_any_bearer_token_accepted():
+    """Any Bearer token is accepted — the API Gateway rewrites the original
+    dbt Cloud token into its own JWT, so we cannot validate the value."""
     payload = make_dbt_webhook_payload(status="Success", status_code=10)
-    request = make_mock_request(payload, signature="Bearer wrong-secret")
+    request = make_mock_request(payload, signature="Bearer any-token-value")
 
     response = main.webhook_handler(request)
 
-    assert response[1] == 403
-    assert "Invalid signature" in response[0]
+    assert response[1] == 200
 
 
 def test_invalid_hmac_signature_rejected():

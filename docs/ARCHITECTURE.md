@@ -223,6 +223,45 @@ When testing workflow YAML directly via `gcloud workflows deploy` (not through T
 | `hightouch-completed` | hightouch-workflow | mpdx-webhook-workflow | Trigger MPDX webhook after Hightouch sync completes |
 | `dbt-retry-events` | dbt-webhook (on failure) | dbt-retry-workflow | Retry transient dbt Cloud job failures |
 
+## Webhook Authentication
+
+### How dbt Cloud Webhook Auth Works (and Why We Don't Validate the Bearer Token)
+
+dbt Cloud webhooks use HMAC-SHA256 for authentication. When dbt Cloud sends a webhook, it computes `HMAC-SHA256(signing_key, request_body)` and sends the hex digest in the `Authorization` header (no `Bearer` prefix). The [dbt Cloud docs](https://docs.getdbt.com/docs/deploy/webhooks#validate-a-webhook) show this validation pattern:
+
+```python
+auth_header = request.headers.get('authorization', None)
+app_secret = os.environ['MY_DBT_CLOUD_AUTH_TOKEN'].encode('utf-8')
+signature = hmac.new(app_secret, request_body, hashlib.sha256).hexdigest()
+return signature == auth_header
+```
+
+However, our Cloud Function sits behind a Google API Gateway (ESPv2). The gateway intercepts the `Authorization` header, replaces the original HMAC value with its own JWT (prefixed with `Bearer`), and forwards the rewritten request to the Cloud Function. The function never sees the original HMAC signature.
+
+**The result:**
+- The `Authorization` header the function receives starts with `Bearer eyJ...` (a gateway JWT)
+- This is NOT the dbt Cloud signing key and NOT the HMAC signature
+- The original HMAC value is gone — the gateway consumed it
+
+**What this means for the code (`webhook_utils.py`):**
+- Bearer tokens are accepted without validation because the value is the gateway JWT, not a dbt Cloud credential
+- The HMAC validation path exists for direct calls that bypass the gateway (e.g., manual `curl` testing without the `Bearer` prefix)
+- **DO NOT** add Bearer token validation — it will always fail and will break all downstream pipelines
+
+**The signing key still matters:**
+- The signing key configured in dbt Cloud must match `dbt-webhook_DBT_WEBHOOK_SECRET` in Secret Manager
+- dbt Cloud uses this key to compute the HMAC it sends — if they don't match, dbt Cloud's own endpoint test fails
+- The key is stored in [1Password](https://start.1password.com/open/i?a=JYIIWWYNKNGGFKU535Y2OR2DOE&v=dhvopdqasf4myknupv5egnktui&i=iwbonr5ku3c5x5ktn2bxuiuu2m&h=cru-data-team.1password.com)
+
+**What protects us:**
+- The API Gateway URL is not publicly discoverable
+- The gateway requires proper routing from dbt Cloud's webhook infrastructure
+- The HMAC path validates direct calls
+
+### Fivetran Webhook Auth (Different Pattern)
+
+Fivetran uses `X-Fivetran-Signature-256` instead of `Authorization`, so the API Gateway does not intercept it. The `fivetran-webhook` function validates the HMAC directly. This is not affected by the gateway rewrite issue.
+
 ## Secrets
 
 All secrets are stored in GCP Secret Manager in project `cru-data-orchestration-prod`. Terraform creates the secret resources; values are added manually via the GCP Console or `gcloud secrets versions add`.

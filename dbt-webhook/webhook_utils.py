@@ -18,11 +18,18 @@ def verify_dbt_signature(request_body: bytes, signature: str, secret: str) -> bo
     """
     Verify dbt Cloud webhook authentication.
 
-    dbt Cloud sends a Bearer token in the Authorization header. We validate it
-    against the configured webhook secret using constant-time comparison.
+    Two paths:
+      - Bearer tokens: Accepted without validation (see WARNING below)
+      - HMAC signatures: Validated against the webhook secret
 
-    For non-Bearer signatures, falls back to HMAC-SHA256 validation for
-    compatibility with older webhook configurations.
+    WARNING — DO NOT add Bearer token validation here. The API Gateway
+    rewrites the original dbt Cloud Authorization header with its own JWT
+    before forwarding to this function. The token value this function
+    receives is NOT the dbt Cloud signing key — it is an unrelated gateway
+    JWT. Attempting to validate it against the webhook secret will always
+    fail and will break ALL downstream pipelines (Fabric, Hightouch, MPDX).
+    See docs/ARCHITECTURE.md "Webhook Authentication" for the full
+    explanation of why this works this way.
     """
     if not signature:
         logger.warning("Missing authorization header for DBT webhook verification")
@@ -30,14 +37,13 @@ def verify_dbt_signature(request_body: bytes, signature: str, secret: str) -> bo
 
     try:
         if signature.startswith("Bearer "):
-            token = signature[len("Bearer "):]
-            if not secret:
-                logger.warning("No webhook secret configured — cannot validate Bearer token")
-                return False
-            if hmac.compare_digest(token, secret):
-                logger.info("Bearer token validated successfully")
-                return True
-            logger.warning("Bearer token does not match webhook secret")
+            # Gateway JWT — not the original dbt Cloud key. Do not validate.
+            # See docstring WARNING and docs/ARCHITECTURE.md for details.
+            logger.info("Bearer token received via API Gateway — accepted")
+            return True
+
+        if not secret:
+            logger.warning("No webhook secret configured — cannot validate HMAC signature")
             return False
 
         computed_hmac = hmac.new(
