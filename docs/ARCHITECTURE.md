@@ -216,6 +216,71 @@ Using the Terraform output pattern instead of the actual hostname will return 40
 - dbt-webhook: `dbt-webhook-handler-gateway-6sk89xvx.uc.gateway.dev`
 - fivetran-webhook: `fivetran-webhook-handler-gateway-6sk89xvx.uc.gateway.dev`
 
+## Adding a New Fivetran-Triggered dbt Job
+
+Use this runbook when you want a Fivetran sync completion to trigger a dbt Cloud job. The `fivetran-dbt` workflow already exists — you don't create new workflows or Pub/Sub topics; you just wire a new connector → job mapping and (if needed) a new Cloud Scheduler entry.
+
+### Architecture (what already exists)
+
+```
+Cloud Scheduler (in functions.tf)
+  → fivetran-trigger CF → starts Fivetran sync
+  → Fivetran completes → fivetran-webhook CF → fivetran-events topic
+  → fivetran-dbt workflow → looks up connector_id in connector_to_dbt_mapping
+  → dbt-trigger CF → runs dbt Cloud job
+```
+
+### Steps
+
+1. **Define the dbt Cloud job** in [`dse-dbt-jobs-as-code/jobs.yml`](https://github.com/CruGlobal/dse-dbt-jobs-as-code).
+   - Use `<<: [*<env_anchor>, *triggered_job_defaults]` to inherit settings — `triggered_job_defaults` sets `triggers.schedule: false`, no completion trigger, `job_type: other`.
+   - No `schedule` block, no `job_completion_trigger_condition` — the workflow fires the job, not dbt Cloud itself.
+   - Keep `description` under 255 chars (dbt-jobs-as-code schema limit).
+   - Merge the PR. The GHA `sync` step creates the job in dbt Cloud and assigns it a real job ID.
+
+2. **Look up the new job ID** in dbt Cloud (Deploy → Jobs → find by name → URL contains `/jobs/<ID>/`).
+
+3. **Set the Fivetran connector to manual schedule.** Critical precondition — without this, both Fivetran's native scheduler AND Cloud Scheduler will fire syncs, causing double dbt runs.
+
+   ```bash
+   # Direct API call — the ~/bin/fivetran wrapper supports pause/resume but NOT schedule_type
+   curl -s -u "${FIVETRAN_API_KEY}:${FIVETRAN_API_SECRET}" \
+     -H "Content-Type: application/json" \
+     -X PATCH \
+     -d '{"schedule_type": "manual"}' \
+     "https://api.fivetran.com/v1/connectors/<connector_id>"
+   ```
+
+   Note: `schedule_type: "manual"` ≠ `paused: true`. `paused: true` blocks API-triggered syncs too — wrong for this pattern. `manual` only disables the native schedule.
+
+4. **Add a Cloud Scheduler entry** in `cru-terraform/applications/data-warehouse/dot/prod/functions.tf` inside `module "fivetran_trigger".schedule`:
+
+   ```hcl
+   el_<schema>_<env> = {
+     # Runs Daily <time + zone>
+     cron = "<UTC cron expression>"
+     argument = {
+       "connector_id" = "<connector_id>"
+     }
+   },
+   ```
+
+   This is what tells `fivetran-trigger` CF when to start the sync.
+
+5. **Add the connector → job mapping** in `cru-terraform/applications/data-warehouse/dot/prod/workflow.tf` inside the `connector_to_dbt_mapping` block:
+
+   ```yaml
+   <connector_id>: ["<dbt_job_id>"]            # el_<schema>_<env> → <dbt_job_name>
+   ```
+
+   The value is a list — a single connector can fan out to multiple dbt jobs (see `supervision_narrowly` for an example).
+
+6. **PR, Atlantis plan, apply.** Expected plan: 1 add (the Cloud Scheduler) + 1 in-place update (the workflow's `source_contents`). If you see destroys, stop and investigate — your branch is probably behind master.
+
+### Known limitation
+
+The `fivetran-dbt` workflow fires the dbt job whenever it receives a `sync_end` event, **regardless of whether the sync succeeded** (status `SUCCESSFUL` vs `FAILED` vs `RESCHEDULED`). A failed Fivetran sync will still trigger a downstream dbt run, which then operates against stale or partial data. Tracked in DT-511.
+
 ## Infrastructure Reference
 
 | Component | Location |
