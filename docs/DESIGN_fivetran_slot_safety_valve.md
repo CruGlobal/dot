@@ -1,185 +1,138 @@
-# Design: Fivetran / RDS Replication-Slot Safety Valve
+# Design: Fivetran Replication-Slot Safety-Valve Sync (DSE mechanism)
 
 **Status:** Draft — 2026-06-17
-**Origin:** Action item from the 2026-06-16 replication-slot review (Data Engineering + DevOps Engineering).
-**Reference:** Datadog notebook 14785624 — "Fivetran Slot Safety Valve: Metrics, Limits & Trigger Thresholds" (owner `team:devops-engineering-team`). Companion pipeline view: notebook 14785154.
-**Related:** [DT-511](https://jira.cru.org/browse/DT-511) (the `fivetran_dbt` Workflow fires the downstream dbt build on `sync_end` regardless of sync success).
+**Origin:** Agreed approach from the 2026-06-16 replication-slot review (Data Engineering + DevOps Engineering). This plan is the result of that discussion.
+**Reference:** Datadog notebook 14785624 — "Fivetran Slot Safety Valve: Metrics, Limits & Trigger Thresholds" (owner `team:devops-engineering-team`) holds the metric, the per-instance caps, and the 50% / 70% / 100% thresholds. Companion pipeline view: notebook 14785154.
 
 ---
 
-## 1. Problem
+## 1. Scope and ownership boundary
 
 Three production AWS RDS Postgres instances feed the warehouse through Fivetran via logical
 replication. Each Fivetran `pgoutput` replication slot retains write-ahead log (WAL) on the
-RDS primary until Fivetran consumes it — a sync advances the slot's `restart_lsn` and
-releases the retained WAL. Between syncs, or when a connector is paused or broken, retained
-WAL accumulates.
+RDS primary until Fivetran consumes it; a sync advances the slot's `restart_lsn` and releases
+the retained WAL. If retained WAL reaches the instance's `max_slot_wal_keep_size` cap,
+Postgres invalidates the slot and Fivetran must perform a full re-snapshot — the mechanism
+behind the recurring "Invalid Replication Slot" connector breaks. The cap protects database
+storage (no outage), but invalidation plus full re-sync is disruptive, and it is silent until
+it happens.
 
-Each instance has a hard cap (`max_slot_wal_keep_size`, set in cru-terraform). When retained
-WAL reaches the cap, Postgres invalidates the slot and Fivetran must perform a full
-re-snapshot. That invalidation is the mechanism behind the recurring "Invalid Replication
-Slot" connector breaks. The cap protects database storage (no outage), but invalidation plus
-full re-sync is disruptive and costly, and it is silent until it happens.
+The agreed remedy is a safety valve: when retained WAL reaches **50% of an instance's cap**,
+automatically force a Fivetran sync to drain the slot before it can approach invalidation.
 
-**Goal:** automatically drain a slot — by forcing a Fivetran sync — when retained WAL
-approaches the cap, before invalidation occurs; and escalate to a human when a forced sync
-cannot drain it (the paused/broken-connector case). A reliable valve also makes it safe to
-relax sync schedules without risking slot invalidation.
+**This document covers only the Data Engineering piece: the mechanism that runs the Fivetran
+sync when a slot reaches 50%.** Everything else is owned by DevOps Engineering and handled
+through their standard process:
 
-## 2. Metric, targets, and limits
+| Owned by **DevOps Engineering** (not specified here) | Owned by **Data Engineering** (this doc) |
+|---|---|
+| The RDS instances and the `max_slot_wal_keep_size` caps | The mechanism that, on the 50% trigger, runs a Fivetran sync to drain the slot |
+| The Datadog metric, the 50% / 70% / 100% thresholds, and the monitors | Connector-state handling around that sync (resume / no-op / stop) |
+| Detection at 50% and the call to the DSE mechanism | Not mutating connector scheduling as a side effect |
+| Human escalation (70%) and all alerting | Emitting a structured failure signal for DevOps's alerting to consume |
 
-### Metric
+DevOps's monitor detects the 50% threshold and invokes the DSE mechanism. The mechanism's job
+is to drain the slot via Fivetran; it does not own detection, thresholds, or escalation.
 
-| Metric | Use |
-|--------|-----|
-| `aws.rds.oldest_replication_slot_lag` | **Primary** — bytes of WAL retained by the most-lagging slot (the Fivetran `pgoutput` slot). Filter by `dbinstanceidentifier`; compare against the cap. |
-| `aws.rds.transaction_logs_generation` | WAL fill-rate (bytes/sec) — estimate time-to-cap. |
-| `aws.rds.transaction_logs_disk_usage` | Secondary — total WAL on disk (slot + checkpoint). |
+## 2. Targets
 
-`aws.rds.oldest_logical_replication_slot_lag` (returns −1 / unreliable on these instances)
-and `aws.rds.replication_slot_disk_usage` (slot state files, ~8 KB — not WAL retained) must
-not be used.
+| RDS instance (`dbinstanceidentifier`) | Fivetran connector | Source (cru-terraform) |
+|------|------|------|
+| `mpdx-api-prod` | `loft_unabashed` | `applications/mpdx/api/prod/locals.tf` |
+| `global-registry-flat-prod` | `freebee_tuberculosis` | `applications/global-registry/prod/locals.tf` |
+| `global-registry-prod` | **to confirm** (see Section 7) | `applications/global-registry/prod/locals.tf` |
 
-The metric is in **bytes**, not a percentage; the percentage of cap is computed per
-instance. The Datadog value is CloudWatch-polled and is therefore ~5–15 minutes stale, which
-is acceptable at a 50%-of-cap trigger that has hours of runway.
+The instance-to-connector map must be a hard-coded, reviewed table in the mechanism's config
+(mirroring `connector_to_dbt_mapping`), not inferred at runtime. The metric, caps, and
+thresholds live in notebook 14785624 and are DevOps-owned — not reproduced here.
 
-### Targets and caps (`max_slot_wal_keep_size`, verified in cru-terraform)
+## 3. Architecture
 
-| Instance (`dbinstanceidentifier`) | Cap | Cap (MB / bytes) | cru-terraform source |
-|------|-----|------|------|
-| `mpdx-api-prod` | 100 GiB | 102400 / 107,374,182,400 | `applications/mpdx/api/prod/locals.tf` |
-| `global-registry-prod` | 75 GiB | 76800 / 80,530,636,800 | `applications/global-registry/prod/locals.tf` |
-| `global-registry-flat-prod` | 75 GiB | 76800 / 80,530,636,800 | `applications/global-registry/prod/locals.tf` |
-
-The Fivetran connector that maps to each instance must be confirmed against the Fivetran
-account and DOT configuration before implementation (see Section 8).
-
-## 3. Thresholds (percentage of each instance's cap)
-
-| Tier | % of cap | MPDX | Global Registry (both) | Action |
-|------|----------|------|------------------------|--------|
-| Auto-trigger (valve) | 50% | 50 GiB | 37.5 GiB | force a Fivetran sync to drain the slot |
-| Human escalation | ~70% | 70 GiB | 50 GiB | notify `@devops-engineering-team@cru.org` |
-| Hard cap (invalidation) | 100% | 100 GiB | 75 GiB | slot dropped → full re-sync (the backstop) |
-
-The valve at 50% self-heals before the 70% human monitor fires. RDS storage autoscaling and
-the cap remain the ultimate backstop below all of this.
-
-## 4. Architecture (decision: 2026-06-17)
-
-**Decision:** a hybrid that fits DOT's existing push-not-poll architecture (see
-`ARCHITECTURE.md`) and adds no new direct database access:
-
-- **Escalation (70%):** a Datadog monitor on `aws.rds.oldest_replication_slot_lag` per
-  instance, notifying `@devops-engineering-team@cru.org`. Pure monitoring, DevOps-owned;
-  partially defined already in the reference notebook.
-- **Valve (50%):** a Datadog monitor at 50% of cap → webhook → thin Cloud Function
-  (validate + publish to Pub/Sub) → Cloud Workflow (orchestration: status check → resume →
-  force-sync → escalate-on-failure, with cooldown). This is exactly the standard DOT flow.
+The mechanism follows DOT's standard push pattern (`ARCHITECTURE.md`): a thin Cloud Function
+validates the inbound trigger and publishes to Pub/Sub; a Cloud Workflow performs the
+orchestration. It reuses the existing `fivetran-trigger/fivetran_client.py` primitives.
 
 ```
-RDS → CloudWatch → Datadog  (aws.rds.oldest_replication_slot_lag, by dbinstanceidentifier)
-  │  datadog_monitor: lag > 50% of cap (per instance)
-  ▼  webhook
-Cloud Function  (validate webhook, classify instance→connector, publish to Pub/Sub, return 200)
+DevOps Datadog monitor (slot at 50% of cap)  →  webhook
+  │
+  ▼
+Cloud Function  (validate the webhook secret, map instance → connector_id, publish to Pub/Sub, return 200)
   │
   ▼  Pub/Sub → Eventarc
-Cloud Workflow  (orchestrate the drain):
-     determine_sync_status(connector)
-       ├─ broken/paused → update_connector(resume); if still failing → escalate, stop
-       └─ healthy       → trigger_sync(connector, force=true)
-     enforce cooldown / max-attempts; escalate if N consecutive fires do not reduce the slot
+Cloud Workflow  (drain orchestration — see Section 4)
+  │
   ▼
-Fivetran  → sync advances restart_lsn → WAL released → slot drains → monitor recovers
+Fivetran  →  sync advances restart_lsn  →  WAL released  →  slot drains
 ```
 
-### Why this shape (and not a poller)
+The mechanism does **not** poll for slot fullness — DevOps's monitor detects the threshold and
+pushes the trigger in. There is no DSE-side database access to the RDS primaries.
 
-- DOT's documented pattern is **push-not-poll**: thin Cloud Functions publish to Pub/Sub;
-  Cloud Workflows orchestrate. A scheduled poller that queries `pg_replication_slots`
-  directly would contradict that pattern and would require granting DOT credentialed network
-  access to three production RDS primaries — a new, sensitive surface this design avoids.
-- The metric, the CloudWatch→Datadog pipeline, and the 70% escalation monitor already exist
-  or are trivial to add; the valve reuses them.
-- The ~5–15 minute metric staleness is immaterial at a 50%-of-cap trigger with hours of
-  runway. Fill-rate (`aws.rds.transaction_logs_generation`) should be checked per instance to
-  confirm runway from 50% to 100% comfortably exceeds the metric lag plus a sync duration; if
-  any instance's runway is too short, raise the trigger cadence or revisit a real-time read.
+## 4. Drain orchestration (the state machine)
 
-## 5. Drain mechanism and existing primitives
+On each trigger, the Workflow inspects connector state via `fivetran_client`
+(`determine_sync_status`, `get_connector_details`) and branches:
 
-A forced Fivetran sync reads the slot and advances `restart_lsn`, releasing retained WAL:
-`POST /v1/connectors/{connector_id}/sync` with `{"force": true}`.
+| Connector state | Action |
+|---|---|
+| A sync is **already running** | **No-op.** A drain is already in progress; firing again would stack redundant syncs (handles both cooldown and duplicate triggers from monitor re-fire / at-least-once Pub/Sub delivery). |
+| **Paused** | **Resume** (`update_connector(paused=False)`), then force-sync. A paused connector cannot accept an API-triggered sync. |
+| **Broken** (auth / schema failure — not merely paused) | **Stop.** A force-sync will not drain a broken connector. Emit a structured failure signal and let DevOps's escalation handle continued slot growth. Do not attempt a futile sync or a repair. |
+| **Healthy** | **Force-sync** via `trigger_sync(connector_id, force=True)`. |
 
-`fivetran-trigger/fivetran_client.py` already provides the needed primitives:
+Two properties this guarantees:
 
-- `trigger_sync(connector_id, force=True)` — the drain.
-- `determine_sync_status(connector_id)` — the broken/paused-connector guard.
-- `update_connector(...)` — resume a paused connector.
-- `get_connector_details(connector_id)` — state inspection.
+- **Schedule-neutral.** The mechanism calls `trigger_sync` directly and must **not** route
+  through the existing `fivetran-trigger` Cloud Function entry point, which sets
+  `schedule_type: "manual"` on every invocation. Mutating the schedule as a side effect would
+  undermine the connectors' native scheduling (and the frequency change in Section 6). The
+  only connector mutation the mechanism performs is resuming a paused connector.
+- **A forced sync is not proof of a drain.** A `200` from the force call does not guarantee
+  WAL was released — a sync already in flight, or a long historical re-sync (e.g. on
+  history-mode tables), may not advance `restart_lsn` immediately. The mechanism confirms only
+  that the sync was **accepted/initiated**; whether the slot actually fell is confirmed by
+  **DevOps's metric** (their monitor simply re-fires if it did not drain). The mechanism does
+  not re-implement metric-watching.
 
-The valve is therefore mostly orchestration around existing client code, not new Fivetran
-integration.
+## 5. Drain endpoint
 
-## 6. Required guards
+`fivetran_client.trigger_sync(connector_id, force=True)` issues
+`POST /v1/connectors/{connector_id}/force` with body `{"force": true}`. The client already
+provides every primitive the mechanism needs: `trigger_sync`, `determine_sync_status`,
+`update_connector`, `get_connector_details`.
 
-| Guard | Why |
-|-------|-----|
-| Broken/paused-connector check before sync (`determine_sync_status`) | A paused or broken connector (schema change, auth failure — the usual cause of runaway growth) will not drain on a forced sync. Attempt resume-then-sync; if the sync fails, escalate to the human monitor rather than retrying indefinitely. |
-| Cooldown / max-attempts | A slot stays "full" until the drain sync completes and Postgres releases WAL. Without a cooldown the trigger re-fires every evaluation window and hammers the Fivetran API. The cooldown must exceed a typical sync duration for the connector. |
-| Monitor hysteresis | The monitor's recovery threshold sits below 50% so it does not flap around the trigger. |
-| Escalate after N ineffective fires | If repeated valve syncs do not reduce the slot, the real fix is a connector repair or a higher sync cadence — page a human. |
-| Webhook authentication | The Cloud Function validates the Datadog webhook secret on inbound. |
+## 6. Coupled change: sync-frequency reduction (later, not part of the valve)
 
-## 7. Interaction with DT-511
+The 2026-06-16 review also agreed to reduce these connectors' scheduled sync frequency once
+the valve is in place — a sparser schedule is safe precisely because the valve catches slot
+growth between syncs. Sequence: land and prove the valve first, then relax `sync_frequency`
+(via fivetran-as-code or a connector PATCH).
 
-The `fivetran_dbt` Workflow fires the downstream dbt build on `sync_end` regardless of sync
-success. A valve-triggered sync emits `sync_end` and therefore fires the domain build:
+Headroom is large, so this is low-risk: source-freshness tolerances are wide (MPDX
+`warn 1d / error 10d`; Global Registry and Global Registry Flat `warn 7d / error 14d`), the
+connectors currently sync hourly, and the downstream warehouse builds run on their own
+schedules. Downstream dbt builds are intentionally **decoupled** from Fivetran `sync_end`
+(they run on independent schedules to control BigQuery cost), so valve-triggered syncs do not
+fan out extra builds, and the `fivetran_dbt`/`sync_end` interaction (DT-511) does not apply
+here. The safe minimum sync frequency is therefore bounded by each connector's downstream
+build time, not by the current hourly cadence.
 
-- **Extra builds** each time the valve fires (cost). Acceptable if the valve is rare; if it
-  fires often, consider a drain path that does not trigger the downstream build. Decide once
-  the real valve frequency is observed.
-- **Failed-sync fan-out:** if a valve sync fails on a broken connector, DT-511's behavior
-  fires the downstream build on a failed sync. The broken-connector guard (Section 6)
-  mitigates by escalating instead of repeatedly syncing, but the first failed valve sync
-  would still trip DT-511. Resolving DT-511 also benefits this design.
+## 7. Open items / to-dos
 
-## 8. Sync-frequency reduction (coupled change)
+1. **Confirm `global-registry-prod`'s Fivetran connector.** Only `mpdx-api-prod`
+   (`loft_unabashed`) and `global-registry-flat-prod` (`freebee_tuberculosis`) are wired in
+   the DOT scheduler today; `global-registry-prod` has no connector mapped there. Locating /
+   confirming it is a cleanup to-do, not a design blocker.
+2. Decide where the orchestration lives — extend `fivetran-trigger/` (which holds the client)
+   or a dedicated Workflow — consistent with the push pattern and schedule-neutrality.
+3. Sequence the sync-frequency reduction after the valve is proven (Section 6).
 
-The 2026-06-16 review framed two coupled changes: reduce the scheduled Fivetran sync
-frequency on these connectors, and add this valve. The valve is what makes a sparser schedule
-safe — it catches slot growth that a less frequent schedule would otherwise let approach the
-cap. Sequence: land and prove the valve first, then relax `sync_frequency`. Reducing
-frequency also reduces downstream build load (the `fivetran_dbt` Workflow fires builds on
-`sync_end`); confirm the new cadence still meets warehouse-freshness needs for the data these
-three connectors feed (MPDX, Global Registry, Global Registry Flat).
+## 8. Implementation outline (DSE scope)
 
-## 9. Open items
-
-1. Confirm the Fivetran connector that maps to each RDS instance (Section 2).
-2. Reconcile the 70% escalation monitor with whatever already exists in the reference
-   notebook; define the 50% valve monitors per instance.
-3. Confirm where the valve orchestration lives — extend `fivetran-trigger/` (which holds the
-   client) or a dedicated Workflow — consistent with the push-not-poll stack.
-4. Choose the cooldown/attempt-tracking mechanism (Workflow state, a small datastore record,
-   or a pre-sync `determine_sync_status` check).
-5. Decide whether valve syncs should trigger downstream dbt builds (DT-511 coupling).
-6. Sequence the sync-frequency reduction after the valve is proven (Section 8).
-7. Per-instance fill-rate check to confirm runway from 50% to 100% comfortably exceeds metric
-   lag plus sync duration (Section 4).
-
-## 10. Implementation outline (once open items are settled)
-
-- [ ] Confirm connector ↔ instance mapping.
-- [ ] Escalation: Datadog monitor at 70% of cap per instance → `@devops-engineering-team`.
-- [ ] Valve monitor: Datadog monitor at 50% of cap per instance → webhook.
-- [ ] Cloud Function: validate webhook, map instance → connector, publish to Pub/Sub.
-- [ ] Cloud Workflow: `determine_sync_status` → resume if paused → `trigger_sync(force=true)`
-      → escalate on failure; enforce cooldown / max-attempts.
-- [ ] Decide downstream-build behavior for valve syncs (DT-511).
-- [ ] Test: drive a slot toward 50% (or simulate the metric) → valve fires → slot drains →
-      monitor recovers; verify cooldown and broken-connector escalation.
-- [ ] Runbook entry: response when the valve escalates (slot not draining).
-- [ ] After the valve is proven: relax `sync_frequency` on the three connectors and confirm
-      warehouse freshness holds.
+- [ ] Hard-coded, reviewed instance → connector_id map (confirm `global-registry-prod`).
+- [ ] Cloud Function: validate the webhook secret, map instance → connector, publish to Pub/Sub.
+- [ ] Cloud Workflow drain orchestration (Section 4): state check → no-op / resume+sync / stop / force-sync; schedule-neutral; emit a structured failure signal on the broken-connector path for DevOps's alerting.
+- [ ] Confirm with DevOps the trigger contract (webhook payload + secret) their 50% monitor will send.
+- [ ] Test: drive a slot toward 50% (or simulate the trigger) → mechanism force-syncs → slot drains; verify the no-op-while-syncing, paused-resume, and broken-connector-stop branches.
+- [ ] Runbook note (DSE side): what the broken-connector failure signal means and how to act on it.
+- [ ] After the valve is proven: relax `sync_frequency` on the connectors (Section 6).
