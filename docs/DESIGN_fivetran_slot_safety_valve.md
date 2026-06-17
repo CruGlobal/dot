@@ -51,11 +51,16 @@ consequences for this design:
   a human is paged so it can self-heal; the notebook proposes 50% of cap. The existing
   monitors start at 70% (warning). A trigger at the valve threshold that **invokes the DSE
   mechanism** does not exist yet.
-- **The trigger contract is the open DSE-to-detection interface.** The current monitors only
-  email DevOps; none calls a webhook into the DSE mechanism. Whoever owns detection must wire
-  a notification (a 50%-of-cap monitor, or a webhook on an existing one) to the mechanism's
-  endpoint, with an agreed payload (at minimum the `dbinstanceidentifier`, from which the
-  mechanism resolves the connector). Defining that contract is a prerequisite to building.
+- **The trigger contract is a shared DSE-to-detection interface, not a solo task.** The
+  current monitors only email DevOps; none calls into the DSE mechanism. The likely shape is
+  a **dedicated Datadog monitor at the valve threshold** (the notebook's ~50% of cap, below
+  the 70% human warning) whose **webhook notification** invokes the mechanism — Datadog
+  supports `@webhook-…` notifications natively, so this is a well-understood piece, not an
+  open research problem. The split: **detection owns the monitor and points its webhook at
+  the mechanism's endpoint; DSE owns the endpoint and the payload spec** (at minimum the
+  `dbinstanceidentifier`, from which the mechanism resolves the connector). What the webhook
+  ultimately calls depends on the orchestration-placement decision in Section 6. Agreeing the
+  endpoint + payload is a prerequisite to building.
 
 ## 4. Targets and connector mapping (verified via the Fivetran API)
 
