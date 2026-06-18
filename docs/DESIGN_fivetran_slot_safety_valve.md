@@ -144,7 +144,9 @@ Evolve `fivetran-trigger` into one component handling scheduled *and* event-driv
 shared guards, as part of the "all connectors DOT-scheduled" direction (Section 8).
 - **Pros:** strategically coherent — addresses the valve and the scheduling migration
   together; one home for all Fivetran sync logic with guards; the right place for "set
-  `manual` conditionally."
+  `manual` conditionally," and the natural home for the recency-skip "adaptive cadence" in
+  Section 7 (which needs the same last-sync state-check shared across the scheduled and valve
+  paths).
 - **Cons:** much larger scope; couples the (contained) valve to a broader refactor; needs the
   most design and review time.
 
@@ -166,6 +168,19 @@ schedules. Downstream dbt builds are intentionally decoupled from Fivetran `sync
 run on independent schedules to control BigQuery cost), so valve-triggered syncs do not fan
 out extra builds. The safe minimum sync frequency is bounded by each connector's downstream
 build time, not by the current hourly cadence.
+
+**Adaptive cadence (optional enhancement).** A valve-triggered sync also refreshes the data,
+so a scheduled sync that fires shortly after is redundant. The scheduled trigger can be made
+*recency-aware*: before syncing, check the connector's last successful sync (`fivetran_client`
+already exposes it) and skip if it occurred within the interval — e.g. a valve sync at 9:50
+makes the 10:00 scheduled tick a no-op. This is the same last-sync state-check the valve's
+in-progress guard uses, applied to the scheduled path, giving a self-trimming cadence (sync on
+schedule *unless* a sync — scheduled or valve — already ran recently) rather than literally
+rescheduling the cron, which Cloud Scheduler does not support cleanly. It is an optimization,
+not load-bearing — a redundant incremental sync is cheap and downstream builds are decoupled —
+and because it wants the recency logic shared across the scheduled and valve paths, it favors
+the unified orchestrator (Section 6, Option C). The skip window should be tied to the interval
+(skip the immediately-following tick, not one that is legitimately due).
 
 ## 8. Coupled cleanup: migrate connectors to DOT scheduling
 
@@ -204,6 +219,9 @@ connector must be migrated to DOT scheduling (add to the `fivetran_trigger` bloc
 3. **Connector scheduling migration (Section 8):** migrate `centralized_mitigation` (and the
    wider `auto` list) to DOT scheduling; sequence relative to the valve.
 4. **Frequency reduction (Section 7):** sequence after the valve is proven.
+5. **Adaptive cadence (Section 7):** optional recency-skip so a scheduled sync no-ops when the
+   valve (or a recent scheduled run) already synced. An optimization; favors Option C (shared
+   recency logic across the scheduled and valve paths).
 
 ## 10. Implementation outline (DSE scope)
 
