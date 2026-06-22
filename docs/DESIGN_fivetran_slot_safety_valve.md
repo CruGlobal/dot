@@ -1,6 +1,6 @@
 # Design: Fivetran Replication-Slot Safety-Valve Sync (DSE mechanism)
 
-**Status:** Draft — 2026-06-17
+**Status:** Reviewed — 2026-06-18. Approved by the architect (Matt Drees) on dot PR #103; DevOps reviewing the webhook PR (cru-terraform #10907). Review decisions are resolved in Section 9.
 **Origin:** Agreed approach from the 2026-06-16 replication-slot review (Data Engineering + DevOps Engineering). This plan is the result of that discussion.
 **Reference:** Datadog notebook 14785624 — "Fivetran Slot Safety Valve: Metrics, Limits & Trigger Thresholds" holds the metric, the per-instance caps, and the threshold rationale. Companion pipeline view: notebook 14785154.
 
@@ -144,16 +144,15 @@ Evolve `fivetran-trigger` into one component handling scheduled *and* event-driv
 shared guards, as part of the "all connectors DOT-scheduled" direction (Section 8).
 - **Pros:** strategically coherent — addresses the valve and the scheduling migration
   together; one home for all Fivetran sync logic with guards; the right place for "set
-  `manual` conditionally," and the natural home for the recency-skip "adaptive cadence" in
-  Section 7 (which needs the same last-sync state-check shared across the scheduled and valve
-  paths).
+  `manual` conditionally."
 - **Cons:** much larger scope; couples the (contained) valve to a broader refactor; needs the
   most design and review time.
 
-**Open decision:** ship **B now and converge to C later** (the valve Workflow becomes a
-building block of the unified orchestrator), or commit to **C from the start**. Option A is
-viable only if the guards in Section 5 are judged unnecessary. This is the decision to settle
-in review.
+**Decision (review, 2026-06-18): Option B.** Ship the dedicated guarded valve component.
+Converging to a unified orchestrator (C) is **not** pursued — the architect judged its added
+complexity (including the adaptive-cadence idea that motivated it) not worth it. Option A is
+rejected: the Section 5 guards are needed and don't belong bolted onto the shared
+scheduled-trigger path.
 
 ## 7. Coupled change: sync-frequency reduction (later)
 
@@ -166,21 +165,29 @@ Headroom is large, so this is low-risk: source-freshness tolerances are wide (MP
 connectors currently sync hourly, and the downstream warehouse builds run on their own
 schedules. Downstream dbt builds are intentionally decoupled from Fivetran `sync_end` (they
 run on independent schedules to control BigQuery cost), so valve-triggered syncs do not fan
-out extra builds. The safe minimum sync frequency is bounded by each connector's downstream
-build time, not by the current hourly cadence.
+out extra builds. **Decision (review): reduce to once per day — not less than daily.** Daily
+sits well inside the freshness tolerances above, and the architect set daily as the floor.
 
-**Adaptive cadence (optional enhancement).** A valve-triggered sync also refreshes the data,
-so a scheduled sync that fires shortly after is redundant. The scheduled trigger can be made
-*recency-aware*: before syncing, check the connector's last successful sync (`fivetran_client`
-already exposes it) and skip if it occurred within the interval — e.g. a valve sync at 9:50
-makes the 10:00 scheduled tick a no-op. This is the same last-sync state-check the valve's
-in-progress guard uses, applied to the scheduled path, giving a self-trimming cadence (sync on
-schedule *unless* a sync — scheduled or valve — already ran recently) rather than literally
-rescheduling the cron, which Cloud Scheduler does not support cleanly. It is an optimization,
-not load-bearing — a redundant incremental sync is cheap and downstream builds are decoupled —
-and because it wants the recency logic shared across the scheduled and valve paths, it favors
-the unified orchestrator (Section 6, Option C). The skip window should be tied to the interval
-(skip the immediately-following tick, not one that is legitimately due).
+**Schedule placement (the chosen cost mitigation).** Place each daily sync **outside the
+connector's high-churn window**, so a scheduled sync and a valve-triggered sync never run
+back-to-back (two Fivetran→BigQuery merges in quick succession). For **MPDX** — the only
+high-volume connector (the Fivetran logs show ≈10.4M rows/day extracted vs ~123k for
+Global Registry Flat and ~4.5k for Global Registry) — the churn peak is **09–14 UTC
+(≈5–10am ET)** at 600–700k rows/sync, with a quiet evening/overnight window
+(≈3.7–18k rows/sync). The slot is most likely to approach the valve threshold during that
+peak, so scheduling the daily sync in the quiet window keeps the scheduled drain and any valve
+drain hours apart. (Time-of-day does not change a *daily* sync's volume — it ships the full
+day's WAL whenever it runs — so this is purely about separating the two drains, not reducing
+the pull.)
+
+**Cost rationale.** Fivetran's own price is MAR (monthly *unique* active rows) and is
+frequency-neutral; the large MAR/BigQuery spikes come from re-snapshots (the logs show a single
+352M-row re-import in 60 days), which the valve exists to prevent. The cost that scales with
+sync count is the Fivetran→BigQuery load+merge each sync runs — so hourly→daily (≈24× fewer
+merges) is the real BigQuery saving, and schedule placement removes the occasional extra
+back-to-back merge. An "adaptive cadence" (skip-the-scheduled-sync-if-one-just-ran) was
+considered and **dropped**: it saves only that same occasional merge while trading away
+schedule predictability — schedule placement achieves the cost goal without the added logic.
 
 ## 8. Coupled cleanup: migrate connectors to DOT scheduling
 
@@ -210,18 +217,20 @@ This is a separate workstream that the valve depends on for `global-registry-pro
 connector must be migrated to DOT scheduling (add to the `fivetran_trigger` block, set
 `manual`) before the valve can drain it cleanly.
 
-## 9. Open items / decisions for review
+## 9. Decisions (resolved in review, 2026-06-18)
 
-1. **Orchestration placement (Section 6):** B-now-converge-to-C vs. C-from-the-start. The
-   central decision.
-2. **Trigger contract (Section 3):** define the valve trigger (a 50%-of-cap monitor or a
-   webhook on an existing monitor) and the payload it sends to the mechanism.
-3. **Connector scheduling migration (Section 8):** migrate `centralized_mitigation` (and the
-   wider `auto` list) to DOT scheduling; sequence relative to the valve.
-4. **Frequency reduction (Section 7):** sequence after the valve is proven.
-5. **Adaptive cadence (Section 7):** optional recency-skip so a scheduled sync no-ops when the
-   valve (or a recent scheduled run) already synced. An optimization; favors Option C (shared
-   recency logic across the scheduled and valve paths).
+Settled with the architect (Matt Drees), who approved the PR on this basis:
+
+1. **Orchestration (Section 6): Option B** — a dedicated guarded valve component. Not
+   converging to a unified orchestrator (C).
+2. **Trigger contract (Section 3): 50% of cap.** Webhook payload = a simple slug (the instance
+   id, e.g. `mpdx-api-prod`); DOT maps the slug to the Fivetran connector.
+3. **Connector migration (Section 8): migrate the Fivetran-native (`auto`) connectors to DOT
+   scheduling in bulk** (not piecemeal).
+4. **Frequency (Section 7): reduce to once per day — not less than daily.**
+5. **Adaptive cadence: dropped** in favor of schedule placement (Section 7).
+
+Remaining work is the implementation outline below (Section 10).
 
 ## 10. Implementation outline (DSE scope)
 
@@ -233,5 +242,7 @@ connector must be migrated to DOT scheduling (add to the `fivetran_trigger` bloc
 - [ ] Test: drive a slot toward the trigger (or simulate it) → mechanism force-syncs → slot
       drains; verify the already-syncing, paused-resume, and broken-stop branches.
 - [ ] Runbook note (DSE side): what the broken-connector failure signal means and how to act.
-- [ ] Migrate `global-registry-prod` (`centralized_mitigation`) to DOT scheduling (Section 8).
-- [ ] After the valve is proven: relax `sync_frequency` on the connectors (Section 7).
+- [ ] Migrate the Fivetran-native (`auto`) connectors to DOT scheduling **in bulk** (Section 8),
+      including the valve's `centralized_mitigation` (`global-registry-prod`).
+- [ ] After the valve is proven: reduce `sync_frequency` to **daily**, each connector's run
+      placed **outside its high-churn window** (Section 7).
