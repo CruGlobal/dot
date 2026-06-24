@@ -69,37 +69,49 @@ Pub/Sub topic: fabric-job-events
     → if failed: log for manual review (dormant retry logic available)
 ```
 
-### dbt Job Failure Retry (Webhook → Pub/Sub → dbt Cloud)
+### dbt Job Failure Retry (Webhook → Pub/Sub → Cloud Workflow → dbt Cloud)
 
 ```
 dbt Cloud job fails (status_code=20)
   → POST to dbt-webhook Cloud Function
     → verify signature, parse payload
     → detect failure status (status_code=20 or run_status="Error")
-    → publish to Pub/Sub topic: dbt-retry-events
-      (includes job_id, run_id, job_name, attempt_number=0)
+    → publish to Pub/Sub topic: dbt-retry-events (job_id, run_id, job_name, account_id)
     → return 200 immediately
 
 Pub/Sub topic: dbt-retry-events
   → Eventarc → Cloud Workflow (dbt-retry-workflow)
-    → decode message, extract retry context
-    → check attempt_number < max_retries (default: 1)
-    → if max retries exceeded: log DBT_JOB_RETRY_EXHAUSTED alert, stop
-    → fetch run_results.json from dbt Cloud API (classify failure)
+    → fetch the failed run's metadata (include_related=["trigger","run_steps"])
+        · loop guard (fail-closed): if the run's trigger.cause already starts with
+          "Auto-retry", it was itself a retry → DBT_JOB_RETRY_EXHAUSTED, stop.
+          If the metadata cannot be read → DBT_JOB_RETRY_GUARD_UNCERTAIN, stop (no retry).
+    → fetch run_results.json and classify every failed node:
+        · test failure (status "fail") → non-transient
+        · execution error (status "error") whose message matches the transient allowlist
+          (BigQuery 409 job-id collision, rate/quota limits, 5xx, deadline, connection
+          resets, …) → transient; any other error → non-transient
+        · retry ONLY if ≥1 failed node AND every failed node is transient
+        · default-deny: missing/empty run_results, or a step that errored with no failed
+          node in the artifact (command-level/compile/connection abort) →
+          DBT_JOB_NOT_RETRYABLE, stop
     → wait 5 minutes (base_delay_seconds)
+    → dedup: skip (superseded) if a newer run for this job already exists
     → POST to dbt-trigger Cloud Function with:
         job_id: original job_id
-        cause: "Auto-retry (attempt N): transient failure in run {run_id}"
+        cause: "Auto-retry for transient failure in run {run_id}"
     → log retry success
 ```
 
 **Key design decisions:**
 
-- **Max 1 retry** — prevents runaway retry loops. If a job fails twice, it needs human attention.
-- **5-minute delay** — gives transient issues (network, API rate limits) time to resolve without being so long that alerts are delayed.
-- **Cause tracking** — the retry workflow passes a descriptive `cause` to dbt-trigger so retried runs are clearly identified in the dbt Cloud UI. The `cause` field also enables future loop detection (check if previous run was already a retry).
-- **run_results.json fetch** — the workflow fetches artifacts to classify failures. If artifacts aren't available (setup/compile failure), the job is still retried since those are often transient.
-- **Uses dbt-trigger SA** — the retry workflow runs as the dbt-trigger service account, which already has permissions to trigger dbt jobs and access the DBT_TOKEN secret.
+- **Transient-only, default-deny classification** — the workflow retries only infrastructure/transient errors (e.g. the BigQuery `409 Already Exists: Job` collision, rate/quota limits, 5xx, deadline/connection errors) identified from `run_results.json`. Test failures, missing tables/columns, broken joins, and other invalid SQL are never retried. Anything that cannot be positively classified as transient is left for a human.
+- **Max 1 retry, enforced via `cause`** — the cap is enforced by reading the failed run's `trigger.cause` (`include_related=["trigger"]`): a run whose cause already starts with "Auto-retry" is not retried again. There is no `attempt_number` counter — the webhook still emits `attempt_number=0`, but the workflow does not use it.
+- **Fail-closed** — if run metadata cannot be read, the workflow cannot confirm the run was not already a retry, so it does not retry. A missed retry of a genuine transient is cheap (re-run by hand); an uncapped retry loop is not.
+- **Multi-step cross-check** — `run_steps` is read to detect step-level errors; if a step errored but `run_results.json` explains no failed node, the failure is command-level/uncovered and is not retried.
+- **Dedup** — at-least-once delivery can duplicate failure events; before triggering, the workflow skips (superseded) if a newer run for the job already exists.
+- **5-minute delay** — gives transient issues (network, API rate limits) time to clear without delaying escalation much.
+- **Alerting** — `DBT_JOB_NOT_RETRYABLE`, `DBT_JOB_RETRY_EXHAUSTED`, and `DBT_JOB_RETRY_GUARD_UNCERTAIN` are emitted as ERROR-severity logs and surfaced by a Datadog monitor, so failures the workflow will not auto-fix escalate to a human.
+- **Service account + logging** — the workflow runs as the dbt-trigger service account, which has dbt-job trigger and DBT_TOKEN secret access **and** `roles/logging.logWriter`. The logWriter grant is required because a Cloud Workflow's `sys.log` calls the Logging API as the workflow's own service account; without it the workflow fails on its first log step.
 
 ### dbt → Hightouch → MPDX (Webhook → Pub/Sub → Hightouch API → Webhook)
 
