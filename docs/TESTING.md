@@ -162,3 +162,45 @@ git push origin poc
 ```
 
 **Note**: The dbt-trigger GHA deployment may fail in POC because the function was originally created by terraform with a schedule trigger, not HTTP trigger. The webhook deployment works correctly.
+
+## Fivetran slot valve (DT-561)
+
+The slot valve has two halves:
+
+- **Cloud Function** (`fivetran-slot-valve/main.py`) — covered by **unit tests** (`fivetran-slot-valve/main_test.py`, run with `pytest`). This is the fast, CI-able layer.
+- **Cloud Workflow** (`fivetran_slot_valve_workflow.yaml`, in cru-terraform) — the drain state machine. There is **no offline Cloud Workflows runtime**, so it can only be validated by deploying it. The repeatable integration test is the script `fivetran-slot-valve/poc_test.sh`.
+
+### Safe test target
+
+Use the **`grip_oblivious`** connector (`el_fivetran_logs_stage` — the *stage* Fivetran-logs connector). Only DSE consumes it, so force-syncing / pausing / resuming it during tests has **no external blast radius**. (Recorded in the orchestration program doc as the designated sync-side test target.)
+
+### Decision table (what each branch should do)
+
+The workflow GETs the connector and branches on its state:
+
+| Connector state | `setup_state` / `sync_state` / `paused` | Expected workflow result |
+|---|---|---|
+| Not connected (broken/incomplete) | `setup_state != "connected"` | `connector_broken` — stops, emits `alert_type: FIVETRAN_SLOT_VALVE_CONNECTOR_BROKEN` (ERROR) for DevOps |
+| Already syncing | `sync_state == "syncing"` | `already_syncing` — no-op (no stacked sync) |
+| Paused | `paused == true` (and connected) | resume (`paused:false`) then `sync_forced` |
+| Healthy | connected, idle | `sync_forced` |
+
+### Run it
+
+```bash
+cd fivetran-slot-valve
+
+# While the workflow still lives on the cru-terraform mechanism feature branch,
+# point the script at that worktree (after merge, the default master path works):
+export WORKFLOW_YAML=$HOME/gitRepos/cru-terraform-worktrees/pmh_06-22-2026_dot_fivetran_slot_valve_mechanism/applications/data-warehouse/dot/prod/fivetran_slot_valve_workflow.yaml
+
+./poc_test.sh setup     # copy Fivetran creds prod->POC, render + deploy the workflow
+./poc_test.sh healthy   # connected+idle  -> expect "sync_forced"
+./poc_test.sh syncing   # mid-sync        -> expect "already_syncing"
+./poc_test.sh paused    # paused          -> expect resume + "sync_forced"
+./poc_test.sh cleanup   # unpause connector, delete POC workflow + secrets
+```
+
+The `not-connected` branch can't be induced safely on a healthy connector, so it is covered by the unit-level logic + review rather than a live POC run.
+
+Check logs with the `gcloud logging read` command above, filtering `resource.labels.workflow_id=fivetran-slot-valve`. **Always run `cleanup` when done** — it deletes the POC workflow + the copied secrets and leaves `grip_oblivious` unpaused.
