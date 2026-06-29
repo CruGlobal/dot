@@ -118,10 +118,12 @@ def valve_handler(request):
     """
     setup_logging()
 
-    # 1. Validate the shared secret supplied by the Datadog webhook.
+    # 1. Validate required configuration up front (a clear 500, rather than a
+    #    misleading "Pub/Sub error" later if GOOGLE_CLOUD_PROJECT is unset).
     expected_secret = os.environ.get("WEBHOOK_SECRET")
-    if not expected_secret:
-        logger.error("WEBHOOK_SECRET is not configured")
+    gcp_project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
+    if not expected_secret or not gcp_project_id:
+        logger.error("WEBHOOK_SECRET or GOOGLE_CLOUD_PROJECT is not configured")
         return ("Server not configured", 500)
 
     provided_secret = request.headers.get("X-Valve-Secret", "")
@@ -163,7 +165,6 @@ def valve_handler(request):
     }
 
     try:
-        gcp_project_id = os.environ["GOOGLE_CLOUD_PROJECT"]
         publisher = _get_publisher()
         topic_path = publisher.topic_path(gcp_project_id, PUBSUB_TOPIC)
         future = publisher.publish(topic_path, json.dumps(message).encode("utf-8"))

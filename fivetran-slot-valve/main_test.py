@@ -96,6 +96,28 @@ def test_global_registry_flat_maps_to_correct_connector(mock_publisher):
     assert message["connector_id"] == "freebee_tuberculosis"
 
 
+def test_tags_provided_as_list(mock_publisher):
+    payload = _payload()
+    payload["tags"] = [
+        "dbinstanceidentifier:mpdx-api-prod",
+        "service:fivetran-slot-valve",
+    ]
+    response = main.valve_handler(_request(payload=payload))
+
+    assert response[1] == 200
+    _, published_bytes = mock_publisher.publish.call_args[0]
+    message = json.loads(published_bytes.decode("utf-8"))
+    assert message["connector_id"] == "loft_unabashed"
+
+
+def test_publish_result_timeout_returns_500(mock_publisher):
+    mock_publisher.publish.return_value.result.side_effect = TimeoutError("timed out")
+
+    response = main.valve_handler(_request(payload=_payload()))
+
+    assert response[1] == 500
+
+
 def test_missing_secret_is_rejected(mock_publisher):
     response = main.valve_handler(_request(secret=None, payload=_payload()))
 
