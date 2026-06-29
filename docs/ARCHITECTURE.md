@@ -69,7 +69,7 @@ Pub/Sub topic: fabric-job-events
     → if failed: log for manual review (dormant retry logic available)
 ```
 
-### dbt Job Failure Retry (Webhook → Pub/Sub → Cloud Workflow → dbt Cloud)
+### dbt Job Failure Retry (Webhook → Pub/Sub → Workflow → dbt-classify → dbt Cloud)
 
 ```
 dbt Cloud job fails (status_code=20)
@@ -80,35 +80,32 @@ dbt Cloud job fails (status_code=20)
     → return 200 immediately
 
 Pub/Sub topic: dbt-retry-events
-  → Eventarc → Cloud Workflow (dbt-retry-workflow)
-    → fetch the failed run's metadata (include_related=["trigger","run_steps"])
-        · loop guard (fail-closed): if the run's trigger.cause already starts with
-          "Auto-retry", it was itself a retry → DBT_JOB_RETRY_EXHAUSTED, stop.
-          If the metadata cannot be read → DBT_JOB_RETRY_GUARD_UNCERTAIN, stop (no retry).
-    → fetch run_results.json and classify every failed node:
-        · test failure (status "fail") → non-transient
-        · execution error (status "error") whose message matches the transient allowlist
-          (BigQuery 409 job-id collision, rate/quota limits, 5xx, deadline, connection
-          resets, …) → transient; any other error → non-transient
-        · retry ONLY if ≥1 failed node AND every failed node is transient
-        · default-deny: missing/empty run_results, or a step that errored with no failed
-          node in the artifact (command-level/compile/connection abort) →
-          DBT_JOB_NOT_RETRYABLE, stop
-    → wait 5 minutes (base_delay_seconds)
-    → dedup: skip (superseded) if a newer run for this job already exists
-    → POST to dbt-trigger Cloud Function with:
-        job_id: original job_id
-        cause: "Auto-retry for transient failure in run {run_id}"
-    → log retry success
+  → Eventarc → Cloud Workflow (dbt-retry-workflow) -- stays thin
+    → POST to the dbt-classify Cloud Function (OIDC) with {account_id, run_id}
+        dbt-classify (Python) fetches the run metadata (include_related=
+        ["trigger","run_steps"]) + run_results.json, applies the loop guard +
+        transient allowlist, and returns a small verdict:
+          { reason, is_retryable, prior_is_retry, failed_count, run_created_at, … }
+    → branch on the verdict:
+        · prior_is_retry              → DBT_JOB_RETRY_EXHAUSTED, stop
+        · reason metadata_unavailable → DBT_JOB_RETRY_GUARD_UNCERTAIN, stop (fail-closed)
+        · not is_retryable            → DBT_JOB_NOT_RETRYABLE, stop
+        · is_retryable                → wait 5 min (base_delay_seconds)
+                                       → dedup: skip (superseded) if a newer run exists
+                                       → POST to dbt-trigger with
+                                         cause: "Auto-retry for transient failure in run {run_id}"
 ```
+
+**Why classification is a function, not all in the workflow:** a Cloud Workflow cannot hold a large `run_results.json` in a variable — it exceeds the Workflows per-variable memory limit (a 354-node job failed exactly this way). Parsing it in Python (`dbt-classify`) sidesteps that, and makes the classification logic unit-testable rather than untestable YAML. This is the one place a DOT function deliberately makes external API calls: the "no API calls from functions" rule exists to keep *webhooks* fast to return; `dbt-classify` is invoked by a workflow (not a webhook) and must read the artifact, so the rule does not apply.
 
 **Key design decisions:**
 
-- **Transient-only, default-deny classification** — the workflow retries only infrastructure/transient errors (e.g. the BigQuery `409 Already Exists: Job` collision, rate/quota limits, 5xx, deadline/connection errors) identified from `run_results.json`. Test failures, missing tables/columns, broken joins, and other invalid SQL are never retried. Anything that cannot be positively classified as transient is left for a human.
-- **Max 1 retry, enforced via `cause`** — the cap is enforced by reading the failed run's `trigger.cause` (`include_related=["trigger"]`): a run whose cause already starts with "Auto-retry" is not retried again. There is no `attempt_number` counter — the webhook still emits `attempt_number=0`, but the workflow does not use it.
-- **Fail-closed** — if run metadata cannot be read, the workflow cannot confirm the run was not already a retry, so it does not retry. A missed retry of a genuine transient is cheap (re-run by hand); an uncapped retry loop is not.
+- **Transient-only, default-deny classification** (in `dbt-classify`) — retries only infrastructure/transient errors (e.g. the BigQuery `409 Already Exists: Job` collision, rate/quota limits, 5xx, deadline/connection errors) identified from `run_results.json`. Test failures, missing tables/columns, broken joins, and other invalid SQL are never retried. Anything that cannot be positively classified as transient is left for a human.
+- **Max 1 retry, enforced via `cause`** — `dbt-classify` reads the failed run's `trigger.cause` (`include_related=["trigger"]`): a run whose cause already starts with "Auto-retry" returns `prior_is_retry` and is not retried again. There is no `attempt_number` counter.
+- **Fail-closed** — if `dbt-classify` cannot read the run metadata it returns `metadata_unavailable`; the workflow then cannot confirm the run was not already a retry, so it does not retry. A missed retry of a genuine transient is cheap (re-run by hand); an uncapped retry loop is not.
 - **Multi-step cross-check** — `run_steps` is read to detect step-level errors; if a step errored but `run_results.json` explains no failed node, the failure is command-level/uncovered and is not retried.
-- **Dedup** — at-least-once delivery can duplicate failure events; before triggering, the workflow skips (superseded) if a newer run for the job already exists.
+- **Dedup stays in the workflow** — the small list-runs check (skip as superseded if a newer run for the job already exists) is cheap and remains in the workflow; only the large-artifact read+classify moved to the function.
+- **Classification is unit-tested** — the logic lives in `dbt-classify/classifier.py` with a unit-test suite (`main_test.py`), covering each rule (transient match, test-failure, unknown error, mixed, no-results, uncovered-step, loop guard, fail-closed). It used to be untestable Cloud Workflows YAML.
 - **5-minute delay** — gives transient issues (network, API rate limits) time to clear without delaying escalation much.
 - **Alerting** — `DBT_JOB_NOT_RETRYABLE`, `DBT_JOB_RETRY_EXHAUSTED`, and `DBT_JOB_RETRY_GUARD_UNCERTAIN` are emitted as ERROR-severity logs and surfaced by a Datadog monitor, so failures the workflow will not auto-fix escalate to a human.
 - **Service account + logging** — the workflow runs as the dbt-trigger service account, which has dbt-job trigger and DBT_TOKEN secret access **and** `roles/logging.logWriter`. The logWriter grant is required because a Cloud Workflow's `sys.log` calls the Logging API as the workflow's own service account; without it the workflow fails on its first log step.

@@ -1,0 +1,5 @@
+# For basic Cloud Run Functions infrastructure
+functions-framework==3.*
+
+# For dbt Cloud API reads
+requests==2.33.0
