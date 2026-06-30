@@ -7,6 +7,9 @@ various pieces of our ELT stack.
 Each function has its own folder.
 The folder name exactly matches the 'name' component of several kinds of GCP resources,
 but most importantly it matches the GCR function name.
+Each function also has its own deploy workflow at
+`.github/workflows/build-deploy-cloudrun-<folder>.yml` (see "Automated deploys" below) — a new
+function does not deploy until that file exists.
 
 ## Local setup
 
@@ -53,6 +56,28 @@ After Terraform creates the secret, add the value via the GCP Console or CLI:
 Devs in the `dps-gcp-role-data-engineers@cru.org` group have access to write secret values but not read them (except in POC).
 
 **Important:** Creating a new secret version does not automatically take effect. You'll need to trigger a new deployment (push to `main` for prod, `staging` for stage).
+
+## Automated deploys (prod & stage)
+
+Prod and stage deploy automatically via GitHub Actions — there is nothing to run by hand:
+
+- Merge/push to `main` → deploys to **prod** (`cru-data-orchestration-prod`).
+- Push to `staging` → deploys to **stage**.
+
+Each function has its **own** deploy workflow: `.github/workflows/build-deploy-cloudrun-<function-name>.yml`,
+path-filtered to `<function-name>/**` so merging only redeploys the functions whose source changed
+(plus a manual `workflow_dispatch` trigger). Each is a thin caller of the shared reusable workflow
+`CruGlobal/.github/.github/workflows/build-deploy-cloudrun-function.yml@v1`.
+
+**Adding a new function?** You MUST add its `build-deploy-cloudrun-<name>.yml` — copy an existing one
+and change `name`, `function_name`, `entry_point`, `runtime`, and the `paths:` filter. Without it,
+merging to `main` runs only the tests; the function never deploys and silently keeps serving the
+Terraform placeholder, with no error to tell you.
+
+The reusable workflow deploys source-only (`gcloud functions deploy --source --entry-point --runtime
+--build-service-account`) — it does not pass `--set-secrets`, `--run-service-account`, `--timeout`, or
+`--memory`, so the Terraform-managed runtime config (secrets, SA, timeout, memory) is preserved across
+deploys. Configure those in Terraform (see the cru-terraform `dot` modules), not here.
 
 ## Deploy new code manually:
 You probably should only be doing this in the POC env.
