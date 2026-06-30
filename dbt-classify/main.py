@@ -87,7 +87,11 @@ def classify_run(request):
         return ("Missing run_id", 400)
 
     run_id = str(request_json["run_id"])
-    account_id = str(request_json.get("account_id", DEFAULT_ACCOUNT_ID))
+    # The webhook always includes the key (built as str(payload.get("accountId", ""))),
+    # so an omitted accountId arrives here as "" -- present but empty. `or` falls back
+    # to the Cru account; a plain .get(..., default) only covers an absent key, not an
+    # empty one, and "" would build a .../accounts//runs/... URL (404).
+    account_id = str(request_json.get("account_id") or DEFAULT_ACCOUNT_ID)
 
     token = (os.environ.get("DBT_TOKEN") or "").strip(chr(0xFEFF)).strip()
     if not token:

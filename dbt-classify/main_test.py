@@ -203,3 +203,24 @@ def test_handler_results_fetch_failure(monkeypatch):
     verdict = json.loads(resp[0])
     assert verdict["reason"] == "results_unavailable"
     assert verdict["is_retryable"] is False
+
+
+def test_handler_empty_account_id_falls_back_to_default(monkeypatch):
+    # The webhook always sends the key (str(payload.get("accountId", ""))), so an
+    # omitted accountId arrives as "" -- it must fall back to the Cru account, not
+    # build an empty-segment URL (.../accounts//runs/...). A plain .get(..., default)
+    # would NOT cover this case (key present), so this guards the `or` fallback.
+    captured = {}
+
+    def make_client(**kw):
+        captured.update(kw)
+        fake = mock.Mock()
+        fake.get_run.return_value = run_data(steps=[ERR_STEP])
+        fake.get_run_results.return_value = [result("error", "Resources exceeded")]
+        return fake
+
+    monkeypatch.setattr(main, "DbtReadClient", make_client)
+
+    resp = main.classify_run(FakeRequest(json_body={"run_id": "492", "account_id": ""}))
+    assert resp[1] == 200
+    assert captured["account_id"] == main.DEFAULT_ACCOUNT_ID
