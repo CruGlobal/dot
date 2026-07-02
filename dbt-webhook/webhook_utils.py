@@ -112,15 +112,17 @@ def map_dbt_to_fabric(dbt_job_id: str) -> dict:
     This mapping will be removed when the Fabric workflow subscribes to the
     dbt-job-completed topic with a Pub/Sub attribute filter instead.
     """
-    dbt_to_fabric_mapping = {
-        "163545": {
-            "workspace_id": "c2bafcfd-df3d-4383-8f76-aed296260453",
-            "item_id": "457998b0-be0c-437c-9b1a-4e5f17b3bf77",
-            "refresh_workspace_id": "b3d68b22-ae01-4017-af31-1392c5c54a6c",
-            "lakehouse_dataset_id": "1402b359-a8e4-48f2-a69e-50bff4e37122",
-            "job_type": "Execute",
-        }
-    }
+    # Map dbt job IDs to their Fabric job config. Empty = no job currently
+    # triggers a Fabric job from this webhook. To (re)enable one, add an entry:
+    #   "<dbt_job_id>": {
+    #       "workspace_id": "...",
+    #       "item_id": "...",
+    #       "refresh_workspace_id": "...",
+    #       "lakehouse_dataset_id": "...",
+    #       "job_type": "Execute",
+    #   }
+    # (163545 "US Donations" → us_donations_prod CopyJob was removed 2026-07-01.)
+    dbt_to_fabric_mapping = {}
 
     mapping = dbt_to_fabric_mapping.get(dbt_job_id)
     if not mapping:
