@@ -155,17 +155,30 @@ def test_success_any_job_id_publishes(mock_publisher):
 
 # ---------------------------------------------------------------------------
 # Legacy Fabric dual-publish
+#
+# The real webhook_utils.map_dbt_to_fabric mapping is intentionally empty (no
+# job currently triggers a Fabric job). These tests patch map_dbt_to_fabric to
+# inject a mapped job so the dual-publish path stays covered for future entries.
 # ---------------------------------------------------------------------------
 
+FABRIC_MAPPING = {
+    "workspace_id": "test-workspace",
+    "item_id": "test-item",
+    "refresh_workspace_id": "test-refresh-workspace",
+    "lakehouse_dataset_id": "test-lakehouse-dataset",
+    "job_type": "Execute",
+}
 
+
+@mock.patch.object(main, "map_dbt_to_fabric", return_value=FABRIC_MAPPING)
 @mock.patch.object(main, "publisher")
-def test_success_with_fabric_mapping_publishes_to_both_topics(mock_publisher):
+def test_success_with_fabric_mapping_publishes_to_both_topics(mock_publisher, _mock_map):
     """Job with Fabric mapping publishes to BOTH completed and fabric topics."""
     mock_future = mock.Mock()
     mock_future.result.return_value = "msg-123"
     mock_publisher.publish.return_value = mock_future
 
-    payload = make_dbt_webhook_payload(status="Success", status_code=10, job_id="163545")
+    payload = make_dbt_webhook_payload(status="Success", status_code=10, job_id="99001")
     request = make_mock_request(payload)
 
     response = main.webhook_handler(request)
@@ -178,8 +191,9 @@ def test_success_with_fabric_mapping_publishes_to_both_topics(mock_publisher):
     assert any("fabric-job-events" in t for t in call_topics)
 
 
+@mock.patch.object(main, "map_dbt_to_fabric", return_value=FABRIC_MAPPING)
 @mock.patch.object(main, "publisher")
-def test_fabric_publish_failure_is_non_fatal(mock_publisher):
+def test_fabric_publish_failure_is_non_fatal(mock_publisher, _mock_map):
     """Fabric publish failure does not affect the 200 response or cause retry."""
     call_count = 0
 
@@ -195,7 +209,7 @@ def test_fabric_publish_failure_is_non_fatal(mock_publisher):
 
     mock_publisher.publish.side_effect = publish_side_effect
 
-    payload = make_dbt_webhook_payload(status="Success", status_code=10, job_id="163545")
+    payload = make_dbt_webhook_payload(status="Success", status_code=10, job_id="99001")
     request = make_mock_request(payload)
 
     response = main.webhook_handler(request)
