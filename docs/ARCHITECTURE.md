@@ -121,21 +121,21 @@ dbt Cloud job completes successfully (NetSuite jobs: 1032903 prod, 1032904 beta-
 
 Pub/Sub topic: dbt-job-completed
   → Eventarc → Cloud Workflow (hightouch-workflow)
-    → check job_id matches [1032903, 1032904] — exit if no match
-    → resolve config: prod job → prod sequence, beta-prod job → stage sequence
+    → look up job_id in the dbt_job_to_hightouch config map — exit if not present
+    → resolve {chain, sequence_id, webhook_secret_name} from the map entry
     → fetch Hightouch API key from Secret Manager
     → trigger Hightouch sync sequence (POST to Hightouch API)
     → poll for completion with exponential backoff (30s → 300s, max 60 polls)
-    → publish completion to Pub/Sub topic: hightouch-completed
+    → publish completion to Pub/Sub topic: hightouch-completed (carries chain + webhook_secret_name)
 
 Pub/Sub topic: hightouch-completed
-  → Eventarc → Cloud Workflow (mpdx-webhook-workflow)
-    → resolve environment (prod/stage) from payload
-    → fetch webhook URL from Secret Manager
-    → call MPDX webhook (GET request)
+  → Eventarc → Cloud Workflow (webhook-notify-workflow)
+    → read webhook_secret_name from the payload
+    → fetch that webhook URL from Secret Manager
+    → call the downstream webhook (GET request)
 ```
 
-**Note:** The dbt-webhook CF publishes ALL successful completions to `dbt-job-completed`. The hightouch-workflow filters by job_id in its first step and exits early for non-matching jobs.
+**Note:** The dbt-webhook CF publishes ALL successful completions to `dbt-job-completed`. The hightouch-workflow looks the job_id up in its `dbt_job_to_hightouch` config map (a `local` in `cru-terraform/.../dot/prod/workflow.tf`, injected via `jsonencode`) and exits for jobs not in the map. **Adding a new "dbt job → Hightouch → webhook" chain is a config change, not workflow code:** add one map entry (`{ chain, sequence_id, webhook_secret_name }`) — reusing an existing webhook secret needs nothing more; a new webhook target also needs its Secret Manager secret + an accessor grant for the webhook-notify SA. The `webhook-notify-workflow` calls whatever secret the payload's `webhook_secret_name` names, so it is generic across chains (not MPDX-specific). Logs and the completion payload carry a `chain` label (the pipeline name), which replaced the earlier `environment` field — ambiguous once a chain's dbt environment (e.g. beta-prod) differed from its downstream target (stage).
 
 ## Anti-Patterns
 
@@ -245,7 +245,7 @@ Using the Terraform output pattern instead of the actual hostname will return 40
 | `fivetran-events` | fivetran-webhook | fivetran-dbt | Trigger dbt job after Fivetran sync completes |
 | `dbt-job-completed` | dbt-webhook (on success) | hightouch-workflow | Generic fan-out for all post-dbt orchestration |
 | `fabric-job-events` | dbt-webhook (on success, legacy for job 163545) | fabric-job-workflow | Trigger Fabric job after US Donations dbt job succeeds |
-| `hightouch-completed` | hightouch-workflow | mpdx-webhook-workflow | Trigger MPDX webhook after Hightouch sync completes |
+| `hightouch-completed` | hightouch-workflow | webhook-notify-workflow | Call the downstream webhook (named by the payload's `webhook_secret_name`) after a Hightouch sync completes |
 | `dbt-retry-events` | dbt-webhook (on failure) | dbt-retry-workflow | Retry transient dbt Cloud job failures |
 
 ## Webhook Authentication
