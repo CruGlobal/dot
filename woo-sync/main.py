@@ -156,27 +156,44 @@ def load_to_dataframe(
         logger.exception(f"Error occurred: {e}")
         raise
 
-def get_last_load_date_time(obj):
+def get_last_load_date_time(query, client=None):
     """
-    This function gets the latest sync_timestamp value from the specified table
+    Return the latest sync_timestamp for a store's orders as an ISO-8601 string,
+    used as the WooCommerce ``modified_after`` incremental watermark.
+
+    Fails loud (DT-594): if the watermark cannot be resolved -- a query error, or a
+    query that returns 0 rows -- this raises instead of returning ``None``. A
+    ``None`` watermark makes the caller request ``modified_after=None``, which pulls
+    the full order history (~1800 pages), hangs past the Cloud Run timeout, and
+    wedges the downstream dbt job with no self-healing. Raising lets
+    ``trigger_sync``'s handler exit non-zero so the failure is visible and the next
+    run retries cleanly.
+
+    NOTE: a legitimately empty store (first-ever load) also returns 0 rows here and
+    will raise. A deliberate initial-backfill path is a separate follow-up decision.
+
+    ``client`` is injectable so the watermark query can be unit-tested without GCP.
     """
     setup_logging()
-    query = obj
-    client = bigquery.Client(project=google_cloud_project_id)
+    if client is None:
+        client = bigquery.Client(project=google_cloud_project_id)
 
     try:
         query_job = client.query(query)
-        result = query_job.result()
-        row = list(result)[0]
-        last_update = row.sync_timestamp
-        last_update = datetime.fromisoformat(str(last_update)).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
+        rows = list(query_job.result())
+    except Exception as e:
+        logger.exception(f"Watermark query failed: {str(e)}")
+        raise
+
+    if not rows:
+        raise ValueError(
+            "Watermark query returned 0 rows; cannot resolve the incremental "
+            "modified_after watermark. Aborting rather than pulling all order "
+            "history (DT-594)."
         )
 
-        return last_update
-
-    except Exception as e:
-        logger.info(f"Get last load date error: {str(e)}")
+    last_update = rows[0].sync_timestamp
+    return datetime.fromisoformat(str(last_update)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 ## BQ DATAFRAMES -------------------------------------------------------------------------------------------------------------------------------------------
 def process_orders(list):
@@ -1135,6 +1152,11 @@ def get_orders_and_items(env_var_list):
     """
     setup_logging()
     last_update_date_time = env_var_list["order_last_update_date_time"]
+    if not last_update_date_time:
+        raise ValueError(
+            "order_last_update_date_time is empty; refusing to request "
+            "modified_after=None, which would pull the full order history (DT-594)."
+        )
     logger.info(last_update_date_time)
     url = env_var_list["orders_api_url"]
     
@@ -1155,14 +1177,12 @@ def get_orders_and_items(env_var_list):
         logger.info(str(current_page) + ' of ' + str(total_pages))
         params = {"modified_after": last_update_date_time, "per_page": 100, "page": current_page}
         response = requests.get(url, headers=headers, params=params, timeout=60)
-        if response.status_code != 200:
-            logger.error(f"API Error: {str(response.status_code)}")
-        else:
-            total_pages = int(response.headers.get('X-WP-TotalPages', '1'))
-            order_resp = response.json()
-            for o in order_resp:
-                orders(o, order_list, env_var_list)
-                order_items(o, order_item_list, env_var_list)
+        response.raise_for_status()
+        total_pages = int(response.headers.get('X-WP-TotalPages', '1'))
+        order_resp = response.json()
+        for o in order_resp:
+            orders(o, order_list, env_var_list)
+            order_items(o, order_item_list, env_var_list)
         current_page += 1
 
     process_orders(order_list)
@@ -1196,16 +1216,14 @@ def get_products_and_bundles(env_var_list):
         logger.info(str(current_page) + ' of ' + str(total_pages))
         params = {"per_page": 100, "page": current_page}
         response = requests.get(url, headers=headers, params=params, timeout=60)
-        if response.status_code != 200:
-            logger.error(f"API Error: {str(response.status_code)}")
-        else:
-            total_pages = int(response.headers.get('X-WP-TotalPages', '1'))
-            product_resp = response.json()
-            for p in product_resp:
-                products(p, product_list, env_var_list)
-                product_bundles(p, product_bundle_list, env_var_list)
-                product_categories(p, product_category_list, env_var_list)
-                product_attributes(p, product_attribute_list, env_var_list)
+        response.raise_for_status()
+        total_pages = int(response.headers.get('X-WP-TotalPages', '1'))
+        product_resp = response.json()
+        for p in product_resp:
+            products(p, product_list, env_var_list)
+            product_bundles(p, product_bundle_list, env_var_list)
+            product_categories(p, product_category_list, env_var_list)
+            product_attributes(p, product_attribute_list, env_var_list)
         current_page += 1
         
     process_products(product_list)
@@ -1243,14 +1261,12 @@ def get_refunds_and_items(env_var_list):
         logger.info(str(current_page) + ' of ' + str(total_pages))
         params = {"per_page": 100, "page": current_page}
         response = requests.get(url, headers=headers, params=params, timeout=60)
-        if response.status_code != 200:
-            logger.error(f"API Error: {str(response.status_code)}")
-        else:
-            total_pages = int(response.headers.get('X-WP-TotalPages', '1'))
-            refund_resp = response.json()
-            for r in refund_resp:
-                refunds(r, refund_list, env_var_list)
-                refund_items(r, refund_item_list, env_var_list)
+        response.raise_for_status()
+        total_pages = int(response.headers.get('X-WP-TotalPages', '1'))
+        refund_resp = response.json()
+        for r in refund_resp:
+            refunds(r, refund_list, env_var_list)
+            refund_items(r, refund_item_list, env_var_list)
         current_page += 1
     
     process_refunds(refund_list)
