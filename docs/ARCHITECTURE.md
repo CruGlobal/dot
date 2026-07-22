@@ -45,7 +45,9 @@ Publishers: okta-sync, woo-sync, process-geography, google-sheets-trigger
 ```
 Pub/Sub topic: fivetran-events
   → Eventarc → Cloud Workflow (fivetran-dbt)
-    → decode message, map connector_id → dbt job_id
+    → decode message; skip unless sync status == SUCCESSFUL   (DT-511)
+    → map connector_id → dbt job_id
+    → per-job min-interval gate: skip if a recent successful/in-flight run exists   (DT-511)
     → POST to dbt-trigger Cloud Function
 ```
 
@@ -226,7 +228,8 @@ Use this runbook when you want a Fivetran sync completion to trigger a dbt Cloud
 Cloud Scheduler (in functions.tf)
   → fivetran-trigger CF → starts Fivetran sync
   → Fivetran completes → fivetran-webhook CF → fivetran-events topic
-  → fivetran-dbt workflow → looks up connector_id in connector_to_dbt_mapping
+  → fivetran-dbt workflow → success filter + per-job min-interval gate (DT-511)
+  → looks up connector_id in connector_to_dbt_mapping
   → dbt-trigger CF → runs dbt Cloud job
 ```
 
@@ -275,11 +278,21 @@ Cloud Scheduler (in functions.tf)
 
    The value is a list — a single connector can fan out to multiple dbt jobs (see `supervision_narrowly` for an example).
 
-6. **PR, Atlantis plan, apply.** Expected plan: 1 add (the Cloud Scheduler) + 1 in-place update (the workflow's `source_contents`). If you see destroys, stop and investigate — your branch is probably behind master.
+6. **(Optional) Set a minimum build interval** for the job in the `dbt_job_min_interval_hours` map in the same `workflow.tf` (DT-511), keyed by dbt job id. **Quote the key** — it must be a string to match the job ids in `connector_to_dbt_mapping`; an unquoted number parses as an int, never matches, and silently leaves the job ungated.
 
-### Known limitation
+   ```yaml
+   "<dbt_job_id>": <hours>    # <dbt_job_name> — why (e.g. valve-managed daily)
+   ```
 
-The `fivetran-dbt` workflow fires the dbt job whenever it receives a `sync_end` event, **regardless of whether the sync succeeded** (status `SUCCESSFUL` vs `FAILED` vs `RESCHEDULED`). A failed Fivetran sync will still trigger a downstream dbt run, which then operates against stale or partial data. Tracked in DT-511.
+   Use this when the connector can sync more often than you want dbt to build — e.g. a Cloud Scheduler run plus a DT-561 valve force-sync on the same day. The gate skips the trigger when the job already has a successful or in-flight run within the window. Omit the job entirely to trigger on every successful sync (the default). Only set an interval on a job whose freshness SLA tolerates at most one build per interval. The gate fails open — a dbt Cloud API hiccup triggers rather than blocks.
+
+7. **PR, Atlantis plan, apply.** Expected plan: 1 add (the Cloud Scheduler) + 1 in-place update (the workflow's `source_contents`). If you see destroys, stop and investigate — your branch is probably behind master.
+
+### Trigger gate: success filter + min-interval (DT-511)
+
+The `fivetran-dbt` workflow triggers a dbt job **only when the Fivetran sync succeeded** — it reads `data.status` from the `sync_end` event and proceeds only on `SUCCESSFUL` (a missing/malformed status fails safe to no trigger). Failed or `RESCHEDULED` syncs no longer build on stale/partial data.
+
+It also applies an optional per-job **min-interval gate** (`dbt_job_min_interval_hours` in `workflow.tf`, step 6 above): a job is skipped when it already has a successful or in-flight run within its configured window, collapsing a scheduled sync + a DT-561 valve force-sync down to one build per interval. Jobs not listed default to `0` = trigger on every successful sync. The gate reads dbt Cloud run history (no new datastore) and **fails open** — any error fetching or parsing recent runs triggers rather than blocks. A failed last run does not satisfy the gate (retries are owned by the DT-568 auto-retry pipeline). A persistent fail-open is surfaced by the `DBT_TRIGGER_GATE_FAILOPEN` Datadog monitor. (Not fully closed: near-simultaneous Pub/Sub redelivery can still double-trigger — that would need an atomic store.)
 
 ## Infrastructure Reference
 
