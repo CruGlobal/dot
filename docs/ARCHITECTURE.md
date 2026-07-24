@@ -287,21 +287,27 @@ Cloud Scheduler (in functions.tf)
 
    The value is a list — a single connector can fan out to multiple dbt jobs (see `supervision_narrowly` for an example).
 
-6. **(Optional) Set a minimum build interval** for the job in the `dbt_job_min_interval_hours` map in the same `workflow.tf` (DT-511), keyed by dbt job id. **Quote the key** — it must be a string to match the job ids in `connector_to_dbt_mapping`; an unquoted number parses as an int, never matches, and silently leaves the job ungated.
+6. **(Optional) Throttle the build to the job's sync cadence** (DT-511) using the two maps in the same `workflow.tf`. Tag the job with a **cadence name** in `dbt_job_build_cadence` (keyed by dbt job id), and make sure that name exists in `build_cadence_min_interval_hours` (cadence name → min hours between builds). **Quote the job-id key** — it must be a string to match the job ids in `connector_to_dbt_mapping`; an unquoted number parses as an int, never matches, and silently leaves the job ungated.
 
    ```yaml
-   "<dbt_job_id>": <hours>    # <dbt_job_name> — why (e.g. valve-managed daily)
+   # build_cadence_min_interval_hours -- cadence name -> min hours between builds.
+   #   value = the sync cadence MINUS a ~1h margin for day-to-day sync-completion drift
+   #   (a value equal to the cadence intermittently skips the build; see cru-terraform #11371).
+   "daily": 23
+   "twice_daily": 11
+   # dbt_job_build_cadence -- dbt job id -> cadence name (unlisted = every successful sync).
+   "<dbt_job_id>": "daily"    # <dbt_job_name>
    ```
 
-   Use this when the connector can sync more often than you want dbt to build — e.g. a Cloud Scheduler run plus a DT-561 valve force-sync on the same day. The gate skips the trigger when the job already has a successful or in-flight run within the window. Omit the job entirely to trigger on every successful sync (the default). Only set an interval on a job whose freshness SLA tolerates at most one build per interval. The gate fails open — a dbt Cloud API hiccup triggers rather than blocks.
+   Use this when the connector can sync more often than you want dbt to build — e.g. a Cloud Scheduler run plus a DT-561 valve force-sync on the same day. Add a new cadence entry for other frequencies, or give a long/variable-duration sync its own entry with more headroom. Omit the job from `dbt_job_build_cadence` to trigger on every successful sync (the default). A job tagged with a cadence name that isn't defined in `build_cadence_min_interval_hours` reverts to every-sync and is surfaced by the `DBT_TRIGGER_GATE_MISCONFIG` Datadog monitor. The gate fails open — a dbt Cloud API hiccup triggers rather than blocks.
 
 7. **PR, Atlantis plan, apply.** Expected plan: 1 add (the Cloud Scheduler) + 1 in-place update (the workflow's `source_contents`). If you see destroys, stop and investigate — your branch is probably behind master.
 
-### Trigger gate: success filter + min-interval (DT-511)
+### Trigger gate: success filter + build-cadence throttle (DT-511)
 
 The `fivetran-dbt` workflow triggers a dbt job **only when the Fivetran sync succeeded** — it reads `data.status` from the `sync_end` event and proceeds only on `SUCCESSFUL` (a missing/malformed status fails safe to no trigger). Failed or `RESCHEDULED` syncs no longer build on stale/partial data.
 
-It also applies an optional per-job **min-interval gate** (`dbt_job_min_interval_hours` in `workflow.tf`, step 6 above): a job is skipped when it already has a successful or in-flight run within its configured window, collapsing a scheduled sync + a DT-561 valve force-sync down to one build per interval. Jobs not listed default to `0` = trigger on every successful sync. The gate reads dbt Cloud run history (no new datastore) and **fails open** — any error fetching or parsing recent runs triggers rather than blocks. A failed last run does not satisfy the gate (retries are owned by the DT-568 auto-retry pipeline). A persistent fail-open is surfaced by the `DBT_TRIGGER_GATE_FAILOPEN` Datadog monitor. (Not fully closed: near-simultaneous Pub/Sub redelivery can still double-trigger — that would need an atomic store.)
+It also applies an optional per-job **build-cadence gate** (`dbt_job_build_cadence` → `build_cadence_min_interval_hours` in `workflow.tf`, step 6 above): a job is tagged with a cadence name (e.g. `daily`), which resolves to a minimum number of hours between builds (the sync cadence minus a ~1h drift margin, so `daily` = 23 not 24). A job is skipped when it already has a successful or in-flight run within that window, collapsing a scheduled sync + a DT-561 valve force-sync down to one build per interval. Jobs not tagged default to trigger on every successful sync. The gate reads dbt Cloud run history (no new datastore) and **fails open** — any error fetching or parsing recent runs triggers rather than blocks. A failed last run does not satisfy the gate (retries are owned by the DT-568 auto-retry pipeline). A persistent fail-open is surfaced by the `DBT_TRIGGER_GATE_FAILOPEN` Datadog monitor, and a job tagged with an unknown cadence name (which reverts to every-sync) by the `DBT_TRIGGER_GATE_MISCONFIG` monitor. (Not fully closed: near-simultaneous Pub/Sub redelivery can still double-trigger — that would need an atomic store.)
 
 ## Infrastructure Reference
 
