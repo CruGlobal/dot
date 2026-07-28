@@ -161,3 +161,41 @@ def test_backfill_chunk_failure_does_not_abort_the_run():
     assert len(responses.calls) == 2
     mock_process_orders.assert_called_once_with([{"id": 1}])
     mock_process_order_items.assert_called_once_with([{"id": 1}])
+
+
+@responses.activate
+def test_backfill_mid_chunk_parse_failure_leaves_no_partial_rows():
+    """A malformed order later in the same chunk must not leave earlier orders from
+    that chunk sitting in the shared buffer to be committed alongside a re-run."""
+    order_ids = [1, 2]
+    responses.add(responses.GET, "http://woo.test/orders", json=[{"id": 1}, {"id": 2}], status=200)
+
+    def _orders_fails_on_second(o, order_list, env_var_list):
+        if o["id"] == 2:
+            raise KeyError("missing field")
+        order_list.append(o)
+
+    with mock.patch("main.orders", side_effect=_orders_fails_on_second), \
+         mock.patch("main.order_items", side_effect=_fake_order_items), \
+         mock.patch("main.process_orders") as mock_process_orders, \
+         mock.patch("main.process_order_items") as mock_process_order_items:
+        backfill_orders_by_id(order_ids, _backfill_env(), batch_size=2, commit_every=5)
+
+    mock_process_orders.assert_not_called()
+    mock_process_order_items.assert_not_called()
+
+
+@responses.activate
+def test_backfill_logs_missing_ids_without_failing_the_chunk():
+    """The API silently omitting a requested ID (e.g. a deleted order) shouldn't
+    block the orders it did return from committing."""
+    order_ids = [1, 2, 3]
+    responses.add(responses.GET, "http://woo.test/orders", json=[{"id": 1}, {"id": 3}], status=200)
+
+    with mock.patch("main.orders", side_effect=_fake_orders), \
+         mock.patch("main.order_items", side_effect=_fake_order_items), \
+         mock.patch("main.process_orders") as mock_process_orders, \
+         mock.patch("main.process_order_items") as mock_process_order_items:
+        backfill_orders_by_id(order_ids, _backfill_env(), batch_size=3, commit_every=5)
+
+    mock_process_orders.assert_called_once_with([{"id": 1}, {"id": 3}])

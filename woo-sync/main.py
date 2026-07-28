@@ -1215,21 +1215,38 @@ def backfill_orders_by_id(order_ids, env_var_list, batch_size=100, commit_every=
     order_list = []
     order_item_list = []
     failed_chunks = []
+    missing_ids = []
     chunks = [order_ids[i:i + batch_size] for i in range(0, len(order_ids), batch_size)]
 
     for i, chunk in enumerate(chunks):
         logger.info(f"backfill chunk {i + 1} of {len(chunks)} ({len(chunk)} orders)")
+        chunk_order_list = []
+        chunk_order_item_list = []
         try:
             params = {"include": ",".join(str(o) for o in chunk), "per_page": batch_size}
             response = requests.get(url, headers=headers, params=params, timeout=60)
             response.raise_for_status()
-            for o in response.json():
-                orders(o, order_list, env_var_list)
-                order_items(o, order_item_list, env_var_list)
+            response_orders = response.json()
+
+            returned_ids = {o["id"] for o in response_orders}
+            chunk_missing_ids = [o for o in chunk if o not in returned_ids]
+            if chunk_missing_ids:
+                logger.warning(f"backfill chunk {i + 1}: {len(chunk_missing_ids)} requested IDs not returned by the API: {chunk_missing_ids}")
+                missing_ids.extend(chunk_missing_ids)
+
+            for o in response_orders:
+                orders(o, chunk_order_list, env_var_list)
+                order_items(o, chunk_order_item_list, env_var_list)
         except Exception as e:
             logger.exception(f"backfill chunk {i + 1} failed: {chunk}")
             failed_chunks.append(chunk)
             continue
+
+        # Only merge into the shared commit buffers once the whole chunk parses cleanly,
+        # so a mid-chunk parse failure can't leave partial rows for a chunk we're about
+        # to log (and re-run) as failed.
+        order_list.extend(chunk_order_list)
+        order_item_list.extend(chunk_order_item_list)
 
         if (i + 1) % commit_every == 0:
             process_orders(order_list)
@@ -1242,6 +1259,8 @@ def backfill_orders_by_id(order_ids, env_var_list, batch_size=100, commit_every=
         process_order_items(order_item_list)
 
     logger.info(f"backfill complete: {len(chunks) - len(failed_chunks)}/{len(chunks)} chunks succeeded")
+    if missing_ids:
+        logger.warning(f"backfill: {len(missing_ids)} requested order IDs were never returned by the API (may be deleted/inaccessible): {missing_ids}")
     if failed_chunks:
         failed_ids = [o for chunk in failed_chunks for o in chunk]
         logger.error(f"backfill: {len(failed_chunks)} chunks failed, re-run with these order IDs: {failed_ids}")
@@ -1354,6 +1373,10 @@ def trigger_sync():
             logger.info(f"BEGIN - FamilyLife order backfill ({len(order_ids)} orders)")
             backfill_orders_by_id(order_ids, env_var_dict_fl)
             logger.info("FamilyLife order backfill complete")
+            publish_pubsub_message(
+                {"job_id": dbt_job_number},
+                "cloud-run-job-completed",
+            )
             return
 
         sync_timestamp = str(datetime.now(timezone.utc))
