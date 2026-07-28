@@ -1,6 +1,7 @@
 import logging
 import sys
 from unittest import mock
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 import requests
@@ -8,6 +9,7 @@ import responses
 
 from main import (
     CloudLoggingFormatter,
+    backfill_orders_by_id,
     get_last_load_date_time,
     get_orders_and_items,
 )
@@ -98,3 +100,102 @@ def test_orders_non_200_raises():
     responses.add(responses.GET, url, status=500)
     with pytest.raises(requests.exceptions.HTTPError):
         get_orders_and_items(_orders_env(url=url))
+
+
+# --- backfill_orders_by_id: surgical include= re-pull (DT-594 follow-up) -----
+
+def _fake_orders(o, order_list, env_var_list):
+    order_list.append(o)
+
+
+def _fake_order_items(o, order_item_list, env_var_list):
+    order_item_list.append(o)
+
+
+def _backfill_env(url="http://woo.test/orders"):
+    return {
+        "orders_api_url": url,
+        "woo_api_client_id": "test-id",
+        "woo_api_client_secret": "test-secret",
+    }
+
+
+@responses.activate
+def test_backfill_chunks_by_batch_size_and_commits_incrementally():
+    """250 IDs at batch_size=100 -> 3 chunks (100, 100, 50); commit_every=2 means
+    one commit after chunk 2 and a final flush for the trailing chunk 3."""
+    order_ids = list(range(1, 251))
+    for _ in range(3):
+        responses.add(responses.GET, "http://woo.test/orders", json=[{"id": 1}], status=200)
+
+    with mock.patch("main.orders", side_effect=_fake_orders), \
+         mock.patch("main.order_items", side_effect=_fake_order_items), \
+         mock.patch("main.process_orders") as mock_process_orders, \
+         mock.patch("main.process_order_items") as mock_process_order_items:
+        backfill_orders_by_id(order_ids, _backfill_env(), batch_size=100, commit_every=2)
+
+    assert len(responses.calls) == 3
+    include_lens = [
+        len(parse_qs(urlparse(call.request.url).query)["include"][0].split(","))
+        for call in responses.calls
+    ]
+    assert include_lens == [100, 100, 50]
+    assert mock_process_orders.call_count == 2
+    assert mock_process_order_items.call_count == 2
+
+
+@responses.activate
+def test_backfill_chunk_failure_does_not_abort_the_run():
+    """A failed chunk (unlike the daily sync) must not raise -- the remaining
+    chunks still get pulled and committed."""
+    order_ids = list(range(1, 201))
+    responses.add(responses.GET, "http://woo.test/orders", status=500)
+    responses.add(responses.GET, "http://woo.test/orders", json=[{"id": 1}], status=200)
+
+    with mock.patch("main.orders", side_effect=_fake_orders), \
+         mock.patch("main.order_items", side_effect=_fake_order_items), \
+         mock.patch("main.process_orders") as mock_process_orders, \
+         mock.patch("main.process_order_items") as mock_process_order_items:
+        backfill_orders_by_id(order_ids, _backfill_env(), batch_size=100, commit_every=5)
+
+    assert len(responses.calls) == 2
+    mock_process_orders.assert_called_once_with([{"id": 1}])
+    mock_process_order_items.assert_called_once_with([{"id": 1}])
+
+
+@responses.activate
+def test_backfill_mid_chunk_parse_failure_leaves_no_partial_rows():
+    """A malformed order later in the same chunk must not leave earlier orders from
+    that chunk sitting in the shared buffer to be committed alongside a re-run."""
+    order_ids = [1, 2]
+    responses.add(responses.GET, "http://woo.test/orders", json=[{"id": 1}, {"id": 2}], status=200)
+
+    def _orders_fails_on_second(o, order_list, env_var_list):
+        if o["id"] == 2:
+            raise KeyError("missing field")
+        order_list.append(o)
+
+    with mock.patch("main.orders", side_effect=_orders_fails_on_second), \
+         mock.patch("main.order_items", side_effect=_fake_order_items), \
+         mock.patch("main.process_orders") as mock_process_orders, \
+         mock.patch("main.process_order_items") as mock_process_order_items:
+        backfill_orders_by_id(order_ids, _backfill_env(), batch_size=2, commit_every=5)
+
+    mock_process_orders.assert_not_called()
+    mock_process_order_items.assert_not_called()
+
+
+@responses.activate
+def test_backfill_logs_missing_ids_without_failing_the_chunk():
+    """The API silently omitting a requested ID (e.g. a deleted order) shouldn't
+    block the orders it did return from committing."""
+    order_ids = [1, 2, 3]
+    responses.add(responses.GET, "http://woo.test/orders", json=[{"id": 1}, {"id": 3}], status=200)
+
+    with mock.patch("main.orders", side_effect=_fake_orders), \
+         mock.patch("main.order_items", side_effect=_fake_order_items), \
+         mock.patch("main.process_orders") as mock_process_orders, \
+         mock.patch("main.process_order_items") as mock_process_order_items:
+        backfill_orders_by_id(order_ids, _backfill_env(), batch_size=3, commit_every=5)
+
+    mock_process_orders.assert_called_once_with([{"id": 1}, {"id": 3}])
