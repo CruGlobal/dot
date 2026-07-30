@@ -15,13 +15,13 @@ PUBSUB_TOPIC = "fivetran-slot-valve-events"
 # See dot docs/DESIGN_fivetran_slot_safety_valve.md Section 4. Only the active
 # connector per instance is a valid drain target; the paused "dead twin"
 # connectors that share each schema are intentionally excluded.
+# Adding or removing an instance here also requires the matching entry in cru-terraform
+# dot/prod/datadog.tf `fivetran_valve_daily_connectors`: a valve monitor with no mapping
+# here returns 422 and never drains.
 INSTANCE_TO_CONNECTOR = {
     "mpdx-api-prod": "loft_unabashed",  # el_mpdx
     "global-registry-prod": "centralized_mitigation",  # el_global_registry
     "global-registry-flat-prod": "freebee_tuberculosis",  # el_global_registry_flat
-    # Adding or removing an instance here also requires the matching entry in cru-terraform
-    # dot/prod/datadog.tf `fivetran_valve_daily_connectors`: a valve monitor with no mapping here
-    # returns 422 and never drains.
     "summer-missions-prod": "entrench_security",  # el_summer_missions
     "staff-accounting-app-prod": "chairmanship_bestowing",  # el_staff_accounting
     "ert-stage": "communal_whoops",  # el_ert (stage)
