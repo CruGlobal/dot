@@ -19,8 +19,8 @@ INSTANCE_TO_CONNECTOR = {
     "mpdx-api-prod": "loft_unabashed",  # el_mpdx
     "global-registry-prod": "centralized_mitigation",  # el_global_registry
     "global-registry-flat-prod": "freebee_tuberculosis",  # el_global_registry_flat
-    # DT-561 Phase 1 (cru-terraform #11479). Must stay in sync with the
-    # fivetran_valve_daily_connectors map in cru-terraform dot/prod/datadog.tf.
+    # Kept in sync with the fivetran_valve_daily_connectors map in cru-terraform
+    # dot/prod/datadog.tf: a monitor there without an entry here 422s -> inert valve. (DT-561)
     "summer-missions-prod": "entrench_security",  # el_summer_missions
     "staff-accounting-app-prod": "chairmanship_bestowing",  # el_staff_accounting
     "ert-stage": "communal_whoops",  # el_ert (stage)
