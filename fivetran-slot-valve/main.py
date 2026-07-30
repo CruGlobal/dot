@@ -11,7 +11,6 @@ logger.propagate = False
 
 PUBSUB_TOPIC = "fivetran-slot-valve-events"
 
-# Reviewed RDS instance (dbinstanceidentifier) -> active Fivetran connector_id.
 # See dot docs/DESIGN_fivetran_slot_safety_valve.md Section 4. Only the active
 # connector per instance is a valid drain target; the paused "dead twin"
 # connectors that share each schema are intentionally excluded.
