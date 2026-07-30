@@ -19,6 +19,11 @@ INSTANCE_TO_CONNECTOR = {
     "mpdx-api-prod": "loft_unabashed",  # el_mpdx
     "global-registry-prod": "centralized_mitigation",  # el_global_registry
     "global-registry-flat-prod": "freebee_tuberculosis",  # el_global_registry_flat
+    # DT-561 Phase 1 (cru-terraform #11479). Must stay in sync with the
+    # fivetran_valve_daily_connectors map in cru-terraform dot/prod/datadog.tf.
+    "summer-missions-prod": "entrench_security",  # el_summer_missions
+    "staff-accounting-app-prod": "chairmanship_bestowing",  # el_staff_accounting
+    "ert-stage": "communal_whoops",  # el_ert (stage)
 }
 
 # Datadog alert transitions that should NOT trigger a drain. Everything else
