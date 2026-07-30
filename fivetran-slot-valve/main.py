@@ -19,8 +19,9 @@ INSTANCE_TO_CONNECTOR = {
     "mpdx-api-prod": "loft_unabashed",  # el_mpdx
     "global-registry-prod": "centralized_mitigation",  # el_global_registry
     "global-registry-flat-prod": "freebee_tuberculosis",  # el_global_registry_flat
-    # Kept in sync with the fivetran_valve_daily_connectors map in cru-terraform
-    # dot/prod/datadog.tf: a monitor there without an entry here 422s -> inert valve. (DT-561)
+    # Adding or removing an instance here also requires the matching entry in cru-terraform
+    # dot/prod/datadog.tf `fivetran_valve_daily_connectors`: a valve monitor with no mapping here
+    # returns 422 and never drains.
     "summer-missions-prod": "entrench_security",  # el_summer_missions
     "staff-accounting-app-prod": "chairmanship_bestowing",  # el_staff_accounting
     "ert-stage": "communal_whoops",  # el_ert (stage)
