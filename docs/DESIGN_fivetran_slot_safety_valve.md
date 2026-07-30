@@ -68,11 +68,17 @@ consequences for this design:
 |------|------|------|------|
 | `mpdx-api-prod` | `loft_unabashed` (`el_mpdx`) | manual (DOT-scheduled) | dead twin `enter_incredulity` (auto, paused) exists |
 | `global-registry-flat-prod` | `freebee_tuberculosis` (`el_global_registry_flat`) | manual (DOT-scheduled) | dead twin `quicken_wow` (auto, paused) exists |
-| `global-registry-prod` | `centralized_mitigation` (`el_global_registry`) | **auto (Fivetran-native)** | needs migration to DOT (Section 8); dead twin `dawdler_managing` (auto, paused) exists |
+| `global-registry-prod` | `centralized_mitigation` (`el_global_registry`) | manual (DOT-scheduled) | dead twin `dawdler_managing` (auto, paused) exists |
+| `summer-missions-prod` | `entrench_security` (`el_summer_missions`) | auto → manual (DOT-scheduled) | onboarding (DT-561 Phase 1); dead twin `attempted_maybe` (auto, broken) exists |
+| `staff-accounting-app-prod` | `chairmanship_bestowing` (`el_staff_accounting`) | auto → manual (DOT-scheduled) | onboarding (DT-561 Phase 1); direct-to-BigQuery, no dbt trigger |
+| `ert-stage` | `communal_whoops` (`el_ert`) | auto → manual (DOT-scheduled) | onboarding (DT-561 Phase 1); STAGE instance |
 
 The instance-to-connector map must be a hard-coded, reviewed table in the mechanism's config
 (mirroring `connector_to_dbt_mapping`), not inferred at runtime — multiple connectors share a
 schema, and only the active one is the target.
+
+(Sections 1 and 3 describe the original three-instance pilot; the table above is the current full
+set, expanded under DT-561 Phase 1.)
 
 ## 5. The DSE mechanism
 
@@ -197,25 +203,24 @@ is also what lets the valve drain a connector without fighting a native schedule
 
 A connector listed in the `fivetran_trigger` schedule block (cru-terraform
 `applications/data-warehouse/dot/prod/functions.tf`) is DOT-scheduled; the rest are
-Fivetran-native. The valve's `global-registry-prod` target (`centralized_mitigation`) is one
-such case. Audit of active `postgres_rds` connectors still on `auto` scheduling (migration
-candidates):
+Fivetran-native. Audit of active `postgres_rds` connectors and their DOT-migration status:
 
-- `centralized_mitigation` — `el_global_registry` (the valve's gr-prod target)
-- `chairmanship_bestowing` — `el_staff_accounting`
-- `committee_persisting`, `define_uncooked` — `el_ministry_managed_domains`
-- `communal_whoops`, `crossing_accidental` — `el_ert`
-- `entrench_security` — `el_summer_missions`
-- `furniture_magnanimous` — `el_staff_accounting_uat`
-- `hesitate_fret` — `el_cap`
+- `centralized_mitigation` — `el_global_registry` — **DOT-scheduled**
+- `chairmanship_bestowing` — `el_staff_accounting` — **onboarding** (DT-561 Phase 1)
+- `entrench_security` — `el_summer_missions` — **onboarding** (DT-561 Phase 1)
+- `communal_whoops` — `el_ert` (stage) — **onboarding** (DT-561 Phase 1)
+- `committee_persisting`, `define_uncooked` — `el_ministry_managed_domains` — pending (later phase)
+- `crossing_accidental` — `el_ert` (prod) — pending (later phase)
+- `furniture_magnanimous` — `el_staff_accounting_uat` — pending
+- `hesitate_fret` — `el_cap` — pending (later phase)
 
 (The full principle extends to non-Postgres connectors too; the list above is the
 slot-relevant subset. Paused/dead `auto` connectors — e.g. `dawdler_managing`,
 `enter_incredulity`, `quicken_wow` — are not migration targets.)
 
-This is a separate workstream that the valve depends on for `global-registry-prod`: that
-connector must be migrated to DOT scheduling (add to the `fivetran_trigger` block, set
-`manual`) before the valve can drain it cleanly.
+This is a separate workstream. `global-registry-prod` (`centralized_mitigation`) is DOT-scheduled;
+the remaining `auto` connectors above migrate connector-by-connector as each is onboarded to the
+valve (DT-561 rollout phases).
 
 ## 9. Decisions (resolved in review, 2026-06-18)
 
@@ -242,7 +247,8 @@ Remaining work is the implementation outline below (Section 10).
 - [ ] Test: drive a slot toward the trigger (or simulate it) → mechanism force-syncs → slot
       drains; verify the already-syncing, paused-resume, and broken-stop branches.
 - [ ] Runbook note (DSE side): what the broken-connector failure signal means and how to act.
-- [ ] Migrate the Fivetran-native (`auto`) connectors to DOT scheduling **in bulk** (Section 8),
-      including the valve's `centralized_mitigation` (`global-registry-prod`).
+- [~] Migrate the Fivetran-native (`auto`) connectors to DOT scheduling (Section 8) —
+      `centralized_mitigation` (`global-registry-prod`) is done; the rest migrate per-connector as
+      each is onboarded (DT-561 phases), in progress.
 - [ ] After the valve is proven: reduce `sync_frequency` to **daily**, each connector's run
       placed **outside its high-churn window** (Section 7).

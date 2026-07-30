@@ -96,6 +96,25 @@ def test_global_registry_flat_maps_to_correct_connector(mock_publisher):
     assert message["connector_id"] == "freebee_tuberculosis"
 
 
+@pytest.mark.parametrize(
+    "instance,connector_id",
+    [
+        ("summer-missions-prod", "entrench_security"),
+        ("staff-accounting-app-prod", "chairmanship_bestowing"),
+        ("ert-stage", "communal_whoops"),
+    ],
+)
+def test_phase1_instances_map_to_correct_connector(
+    mock_publisher, instance, connector_id
+):
+    response = main.valve_handler(_request(payload=_payload(instance=instance)))
+
+    assert response[1] == 200
+    _, published_bytes = mock_publisher.publish.call_args[0]
+    message = json.loads(published_bytes.decode("utf-8"))
+    assert message["connector_id"] == connector_id
+
+
 def test_tags_provided_as_list(mock_publisher):
     payload = _payload()
     payload["tags"] = [
