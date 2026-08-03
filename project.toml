@@ -1,0 +1,24 @@
+# Buildpack build context (replaces .dockerignore): ship only the nine
+# workloads' runtime source.
+[build]
+exclude = [
+    ".git",
+    ".github",
+    ".idea",
+    ".venv",
+    "docs",
+    "poc-terraform",
+    "*.md",
+    "**/*.md",
+    "**/__pycache__",
+    "**/.pytest_cache",
+    "**/*.pyc",
+    "**/main_test.py",
+    "**/conftest.py",
+    "**/requirements-test.txt",
+    "**/.env",
+    "**/.env.example",
+    "**/poc_test.sh",
+    "**/dockerfile",
+    "**/job.yaml",
+]
