@@ -1,0 +1,12 @@
+# For basic Cloud Run Functions infrastructure
+functions-framework==3.*
+
+# For Google Drive API (to get sheet modifiedTime)
+google-api-python-client>=2.100.0
+google-auth>=2.38.0
+
+# For Pub/Sub messaging
+google-cloud-pubsub>=2.18.0
+
+# For timezone handling
+pytz>=2024.1
