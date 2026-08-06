@@ -6,6 +6,7 @@ import sys
 import os
 import json
 from requests import auth, Session
+from dot_shared import blackout
 
 logger = logging.getLogger("primary_logger")
 logger.propagate = False
@@ -82,6 +83,13 @@ def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
     )
 
 
+# Boot-time blackout visibility: functions-framework imports this module at cold
+# start, and setup_logging() is needed here because the handler-level call hasn't
+# happened yet.
+setup_logging()
+blackout.log_status()
+
+
 @functions_framework.http
 def trigger_sync(request):
     """
@@ -109,6 +117,25 @@ def trigger_sync(request):
     else:
         logger.exception("Failed to retrieve connector_id")
         raise
+
+    # Return 200 on suppression: Cloud Scheduler must not retry a deliberate skip.
+    window = blackout.check(
+        "fivetran_connector",
+        connector_id,
+        force=request_json.get("force") is True,
+    )
+    if window:
+        return (
+            json.dumps(
+                {
+                    "status": "suppressed",
+                    "window": window,
+                    "connector_id": connector_id,
+                }
+            ),
+            200,
+            {"Content-Type": "application/json"},
+        )
 
     client = FivetranClient(basic_auth)
 
