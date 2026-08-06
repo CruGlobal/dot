@@ -10,6 +10,7 @@ import pandas as pd
 from pythonjsonlogger import jsonlogger
 import psutil
 from google.cloud import pubsub_v1
+from dot_shared import blackout
 from okta_sync_utils import (
     get_request,
     get_general_credentials,
@@ -1101,6 +1102,13 @@ def trigger_sync():
     This function will be called when the job is triggered.
     """
     logger = logging.getLogger("primary_logger")
+    blackout.log_status()
+
+    # Deliberate skip -> exit 0 (success); the structured log is the record.
+    # Only CRU_BLACKOUT_FORCE bypasses (set it as an override on a manual invoke).
+    if blackout.check("job", "okta-sync"):
+        sys.exit(0)
+
     logger.info("Starting Okta data synchronization job")
 
     log_memory_usage("- Job Start")

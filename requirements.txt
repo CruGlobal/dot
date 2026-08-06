@@ -1,0 +1,15 @@
+# One pip resolve across all nine workloads (six HTTP functions, three batch
+# jobs): pip picks a single version per package, so dbt-webhook's
+# `functions-framework==3.4.0` pin is what everyone gets (it satisfies the
+# others' `3.*`). A conflict between workloads surfaces here, at build time
+# (that's how dbt-webhook's old `google-cloud-pubsub==2.18.1` pin, protobuf<5,
+# was caught against woo-sync's `protobuf>=5.29.3`).
+-r dbt-classify/requirements.txt
+-r dbt-trigger/requirements.txt
+-r dbt-webhook/requirements.txt
+-r fivetran-slot-valve/requirements.txt
+-r fivetran-trigger/requirements.txt
+-r fivetran-webhook/requirements.txt
+-r okta-sync/requirements.txt
+-r process-geography/requirements.txt
+-r woo-sync/requirements.txt

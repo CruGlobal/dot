@@ -6,6 +6,7 @@ import sys
 import json
 from urllib.parse import urlparse
 from bigquery_client import BigQueryClient
+from dot_shared import blackout
 import pandas as pd
 import zipfile
 from datetime import date
@@ -625,6 +626,13 @@ def process_geo_time_zones():
 
 def main():
     setup_logging()
+    blackout.log_status()
+
+    # Deliberate skip -> exit 0 (success); the structured log is the record.
+    # Only CRU_BLACKOUT_FORCE bypasses (set it as an override on a manual invoke).
+    if blackout.check("job", "process-geography"):
+        sys.exit(0)
+
     try:
         logger.info("Start processing geography data")
         process_geo_admin_1_codes()

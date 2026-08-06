@@ -7,6 +7,7 @@ import os
 import json
 from requests import auth, Session
 import time
+from dot_shared import blackout
 
 
 logger = logging.getLogger("primary_logger")
@@ -71,6 +72,13 @@ def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
     )
 
 
+# Boot-time blackout visibility: functions-framework imports this module at cold
+# start, and setup_logging() is needed here because the handler-level call hasn't
+# happened yet.
+setup_logging()
+blackout.log_status()
+
+
 @functions_framework.http
 def trigger_dbt_job(request):
     """
@@ -99,6 +107,20 @@ def trigger_dbt_job(request):
         raise
 
     cause = request_json.get("cause", "Triggered by Google Cloud Function")
+
+    # Gates scheduled crons AND event-driven cascades: the fivetran-dbt Cloud
+    # Workflow calls this same handler on sync-completion events (e.g. a
+    # slot-valve force-sync mid-window). 200 so Cloud Scheduler / the workflow
+    # don't retry a deliberate skip.
+    window = blackout.check(
+        "dbt_job", job_id, force=request_json.get("force") is True
+    )
+    if window:
+        return (
+            json.dumps({"status": "suppressed", "window": window, "job_id": job_id}),
+            200,
+            {"Content-Type": "application/json"},
+        )
 
     dbt_token = os.environ.get("DBT_TOKEN", None).strip("\ufeff").strip()
     if not dbt_token:
