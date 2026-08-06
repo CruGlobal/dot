@@ -1,5 +1,5 @@
 # Buildpack build context (replaces .dockerignore): ship only the nine
-# workloads' runtime source.
+# workloads' runtime source plus dot_shared/ (imported via PYTHONPATH=/app).
 [build]
 exclude = [
     ".git",
@@ -13,7 +13,7 @@ exclude = [
     "**/__pycache__",
     "**/.pytest_cache",
     "**/*.pyc",
-    "**/main_test.py",
+    "**/*_test.py",
     "**/conftest.py",
     "**/requirements-test.txt",
     "**/.env",

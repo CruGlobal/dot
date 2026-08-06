@@ -39,7 +39,7 @@ jobs:
           FUNCTIONS='[]'
           for dir in */; do
             dir="${dir%/}"
-            if echo "$CHANGED" | grep -q "^${dir}/" && [ -f "${dir}/main_test.py" ]; then
+            if echo "$CHANGED" | grep -q "^${dir}/" && compgen -G "${dir}/*_test.py" >/dev/null; then
               FUNCTIONS=$(echo "$FUNCTIONS" | jq -c --arg d "$dir" '. + [$d]')
             fi
           done
