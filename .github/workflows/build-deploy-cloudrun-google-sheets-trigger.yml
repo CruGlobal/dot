@@ -17,7 +17,7 @@ jobs:
       function_name: google-sheets-trigger
       entry_point: trigger_sheets_check
       runtime: python312
-      environment: ${{ github.ref == 'refs/heads/main' && 'production' || github.ref == 'refs/heads/poc' && 'poc' || github.ref == 'refs/heads/staging' && 'staging' }}
+      environment: ${{ github.ref == 'refs/heads/main' && 'production' || github.ref == 'refs/heads/poc' && 'poc' || github.ref == 'refs/heads/staging' && 'staging-legacy' }}
     secrets:
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       GCP_PROJECT_NUMBER: ${{ vars.GCP_PROJECT_NUMBER }}
