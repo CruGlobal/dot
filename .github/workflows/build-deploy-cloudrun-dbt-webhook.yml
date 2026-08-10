@@ -8,7 +8,7 @@ on:
 
 jobs:
   build_and_deploy:
-    uses: CruGlobal/.github/.github/workflows/build-deploy-cloudrun-function.yml@v1
+    uses: CruGlobal/.github/.github/workflows/build-deploy-cloudrun-function.yml@v2
     with:
       function_name: dbt-webhook
       entry_point: webhook_handler
