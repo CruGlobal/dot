@@ -112,17 +112,32 @@ def map_dbt_to_fabric(dbt_job_id: str) -> dict:
     This mapping will be removed when the Fabric workflow subscribes to the
     dbt-job-completed topic with a Pub/Sub attribute filter instead.
     """
-    # Map dbt job IDs to their Fabric job config. Empty = no job currently
-    # triggers a Fabric job from this webhook. To (re)enable one, add an entry:
-    #   "<dbt_job_id>": {
-    #       "workspace_id": "...",
-    #       "item_id": "...",
-    #       "refresh_workspace_id": "...",
-    #       "lakehouse_dataset_id": "...",
-    #       "job_type": "Execute",
-    #   }
-    # (163545 "US Donations" → us_donations_prod CopyJob was removed 2026-07-01.)
-    dbt_to_fabric_mapping = {}
+    # Map dbt job IDs to their Fabric job config. Fields:
+    #   workspace_id / item_id      Fabric workspace and item (CopyJob, Notebook, ...)
+    #   job_type                    Fabric jobType: "Execute" (CopyJob), "RunNotebook"
+    #   execution_data              Optional. Sent as the request body's executionData
+    #                               (the workflow only sends it for RunNotebook).
+    #   refresh_workspace_id /      Optional. If both set, the workflow also triggers a
+    #   lakehouse_dataset_id        Power BI dataset refresh after the job completes.
+    #
+    # History: 163545 "US Donations" → us_donations_prod CopyJob ran 2025-09 to
+    # 2026-07-01, then was removed. Re-added 2026-09 as a Fabric Notebook run
+    # (spec from David Edwards, Slack DM 2026-09-01). IDs are resource GUIDs,
+    # not credentials; the Azure service principal secret lives in Secret Manager.
+    dbt_to_fabric_mapping = {
+        # "US Donations" → Fabric Notebook (prod)
+        "163545": {
+            "workspace_id": "c2bafcfd-df3d-4383-8f76-aed296260453",
+            "item_id": "84bf60cb-4059-4e20-b18a-120f640a121c",
+            "job_type": "RunNotebook",
+            "execution_data": {
+                "parameters": {
+                    "environment": {"value": "prod", "type": "string"},
+                    "_inlineInstallationEnabled": {"value": True, "type": "bool"},
+                }
+            },
+        },
+    }
 
     mapping = dbt_to_fabric_mapping.get(dbt_job_id)
     if not mapping:
@@ -140,13 +155,16 @@ def create_fabric_job_message(fabric_config: dict, dbt_info: dict) -> dict:
     Build the message payload for the legacy fabric-job-events topic.
 
     This message format is consumed by the fabric-job-workflow in Cloud Workflows.
+    refresh_workspace_id / lakehouse_dataset_id are optional: the workflow skips
+    the Power BI refresh when either is empty. execution_data is optional: the
+    workflow sends it as the request body's executionData for RunNotebook jobs.
     """
     return {
         "workspace_id": fabric_config["workspace_id"],
         "item_id": fabric_config["item_id"],
-        "refresh_workspace_id": fabric_config["refresh_workspace_id"],
-        "lakehouse_dataset_id": fabric_config["lakehouse_dataset_id"],
-        "job_type": fabric_config["job_type"],
+        "refresh_workspace_id": fabric_config.get("refresh_workspace_id", ""),
+        "lakehouse_dataset_id": fabric_config.get("lakehouse_dataset_id", ""),
+        "job_type": fabric_config.get("job_type", "Execute"),
         "trigger_source": "dbt_completion",
         "enable_monitoring": True,
         "source_job_id": dbt_info.get("job_id", ""),
@@ -160,5 +178,5 @@ def create_fabric_job_message(fabric_config: dict, dbt_info: dict) -> dict:
             "dbt_account_id": dbt_info.get("account_id", ""),
             "event_type": dbt_info.get("event_type", ""),
         },
-        "execution_data": None,
+        "execution_data": fabric_config.get("execution_data"),
     }

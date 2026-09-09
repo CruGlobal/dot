@@ -65,9 +65,11 @@ dbt Cloud job completes successfully (status_code=10)
 Pub/Sub topic: fabric-job-events
   → Eventarc → Cloud Workflow (fabric-job-workflow)
     → get Azure credentials from Secret Manager
-    → trigger Fabric job (POST, expect 202 Accepted)
+    → trigger Fabric job (POST .../items/{item_id}/jobs/instances?jobType=..., expect 202 Accepted)
+      · jobType=RunNotebook sends the mapping's execution_data as the executionData body
+      · jobType=Execute (CopyJob) sends an empty body
     → wait 1 hour, then check job status
-    → if completed: optionally trigger Power BI refresh
+    → if completed: trigger Power BI refresh only when refresh_workspace_id + lakehouse_dataset_id are set
     → if failed: log for manual review (dormant retry logic available)
 ```
 
@@ -328,7 +330,7 @@ It also applies an optional per-job **build-cadence gate** (`dbt_job_build_caden
 | `cloud-run-job-completed` | okta-sync, woo-sync, process-geography | cloud-run-job-dbt | Trigger dbt job after CloudRun job completes |
 | `fivetran-events` | fivetran-webhook | fivetran-dbt | Trigger dbt job after Fivetran sync completes |
 | `dbt-job-completed` | dbt-webhook (on success) | hightouch-workflow | Generic fan-out for all post-dbt orchestration |
-| `fabric-job-events` | dbt-webhook (on success, legacy for job 163545) | fabric-job-workflow | Trigger Fabric job after US Donations dbt job succeeds |
+| `fabric-job-events` | dbt-webhook (on success, legacy for job 163545) | fabric-job-workflow | Run the Fabric Notebook (jobType `RunNotebook`) after the US Donations dbt job succeeds |
 | `hightouch-completed` | hightouch-workflow | webhook-notify-workflow | Call the downstream webhook (named by the payload's `webhook_secret_name`) after a Hightouch sync completes |
 | `dbt-retry-events` | dbt-webhook (on failure) | dbt-retry-workflow | Retry transient dbt Cloud job failures |
 
@@ -399,7 +401,7 @@ This sends a POST to the dbt-webhook Cloud Function as if dbt Cloud sent it. The
 - The `DBT_WEBHOOK_SECRET` from 1Password or Secret Manager
 - The webhook endpoint URL: `https://dbt-webhook-handler-gateway-6sk89xvx.uc.gateway.dev/dbt-webhook`
 
-**Trigger Fabric (US Donations, job 163545):**
+**Trigger Fabric Notebook (US Donations, job 163545):**
 ```bash
 curl -s -X POST "https://dbt-webhook-handler-gateway-6sk89xvx.uc.gateway.dev/dbt-webhook" \
   -H "Content-Type: application/json" \
