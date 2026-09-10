@@ -113,19 +113,22 @@ def map_dbt_to_fabric(dbt_job_id: str) -> dict:
     dbt-job-completed topic with a Pub/Sub attribute filter instead.
     """
     # Map dbt job IDs to their Fabric job config. Fields:
-    #   workspace_id / item_id      Fabric workspace and item (CopyJob, Notebook, ...)
-    #   job_type                    Fabric jobType: "Execute" (CopyJob), "RunNotebook"
+    #   workspace_id / item_id      Required. Fabric workspace and item (CopyJob, Notebook, ...)
+    #   job_type                    Required. Fabric jobType: "Execute" (CopyJob), "RunNotebook"
     #   execution_data              Optional. Sent as the request body's executionData
     #                               (the workflow only sends it for RunNotebook).
     #   refresh_workspace_id /      Optional. If both set, the workflow also triggers a
     #   lakehouse_dataset_id        Power BI dataset refresh after the job completes.
     #
-    # History: 163545 "US Donations" → us_donations_prod CopyJob ran 2025-09 to
-    # 2026-07-01, then was removed. Re-added 2026-09 as a Fabric Notebook run
-    # (spec from David Edwards, Slack DM 2026-09-01). IDs are resource GUIDs,
-    # not credentials; the Azure service principal secret lives in Secret Manager.
+    # IDs are resource GUIDs, not credentials; the Azure service principal secret
+    # lives in Secret Manager (fabric-workflow_AZURE_CLIENT_SECRET).
     dbt_to_fabric_mapping = {
-        # "US Donations" → Fabric Notebook (prod)
+        # "US Donations" → Fabric Notebook (prod lakehouse).
+        # Each run does a full load of every table, so a duplicate or extra run is
+        # safe (BigQuery data does not change during the day). Typical runtime is
+        # 35-40 min; the workflow's 1-hour status check treats a still-running
+        # notebook as stalled and flags it for manual review. No Power BI refresh:
+        # the dataset the old CopyJob refreshed belonged to a retired lakehouse.
         "163545": {
             "workspace_id": "c2bafcfd-df3d-4383-8f76-aed296260453",
             "item_id": "84bf60cb-4059-4e20-b18a-120f640a121c",
@@ -164,7 +167,7 @@ def create_fabric_job_message(fabric_config: dict, dbt_info: dict) -> dict:
         "item_id": fabric_config["item_id"],
         "refresh_workspace_id": fabric_config.get("refresh_workspace_id", ""),
         "lakehouse_dataset_id": fabric_config.get("lakehouse_dataset_id", ""),
-        "job_type": fabric_config.get("job_type", "Execute"),
+        "job_type": fabric_config["job_type"],
         "trigger_source": "dbt_completion",
         "enable_monitoring": True,
         "source_job_id": dbt_info.get("job_id", ""),

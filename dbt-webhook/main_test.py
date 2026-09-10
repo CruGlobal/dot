@@ -229,6 +229,45 @@ def test_fabric_message_copyjob_keeps_refresh_fields_and_null_execution_data():
     assert msg["execution_data"] is None
 
 
+@mock.patch.object(main, "publisher")
+def test_us_donations_success_publishes_notebook_message_end_to_end(mock_publisher):
+    """Job 163545 through webhook_handler (no mapping patch) publishes to both
+    topics, and the fabric-job-events body is the RunNotebook message."""
+    mock_future = mock.Mock()
+    mock_future.result.return_value = "msg-163545"
+    mock_publisher.publish.return_value = mock_future
+
+    payload = make_dbt_webhook_payload(status="Success", status_code=10, job_id="163545")
+    request = make_mock_request(payload)
+
+    response = main.webhook_handler(request)
+
+    assert response[1] == 200
+    assert mock_publisher.publish.call_count == 2
+
+    fabric_calls = [
+        c for c in mock_publisher.publish.call_args_list if "fabric-job-events" in c[0][0]
+    ]
+    assert len(fabric_calls) == 1
+    fabric_msg = json.loads(fabric_calls[0][0][1].decode("utf-8"))
+    assert fabric_msg["job_type"] == "RunNotebook"
+    assert fabric_msg["workspace_id"] == "c2bafcfd-df3d-4383-8f76-aed296260453"
+    assert fabric_msg["item_id"] == "84bf60cb-4059-4e20-b18a-120f640a121c"
+    assert fabric_msg["execution_data"]["parameters"]["environment"]["value"] == "prod"
+    assert fabric_msg["refresh_workspace_id"] == ""
+    assert fabric_msg["lakehouse_dataset_id"] == ""
+    assert fabric_msg["source_job_id"] == "163545"
+    assert fabric_calls[0][1]["job_id"] == "163545"
+
+
+def test_fabric_message_requires_job_type():
+    """A mapping entry without job_type must fail loudly, not guess a jobType."""
+    from webhook_utils import create_fabric_job_message
+
+    with pytest.raises(KeyError):
+        create_fabric_job_message({"workspace_id": "ws", "item_id": "it"}, {"job_id": "1"})
+
+
 @mock.patch.object(main, "map_dbt_to_fabric", return_value=FABRIC_MAPPING)
 @mock.patch.object(main, "publisher")
 def test_success_with_fabric_mapping_publishes_to_both_topics(mock_publisher, _mock_map):

@@ -57,9 +57,8 @@ Pub/Sub topic: fivetran-events
 dbt Cloud job completes successfully (status_code=10)
   → POST to dbt-webhook Cloud Function
     → verify signature, parse payload
-    → route by status: success → fabric topic, failure → retry topic
-    → map job_id → Fabric config
-    → publish to Pub/Sub topic: fabric-job-events
+    → route by status: success → dbt-job-completed (all successes), failure → dbt-retry-events
+    → also publish to fabric-job-events if the job has a Fabric mapping (legacy)
     → return 200 immediately
 
 Pub/Sub topic: fabric-job-events
@@ -67,7 +66,7 @@ Pub/Sub topic: fabric-job-events
     → get Azure credentials from Secret Manager
     → trigger Fabric job (POST .../items/{item_id}/jobs/instances?jobType=..., expect 202 Accepted)
       · jobType=RunNotebook sends the mapping's execution_data as the executionData body
-      · jobType=Execute (CopyJob) sends an empty body
+      · jobType=Execute (CopyJob) sends an empty JSON object (`{}`)
     → wait 1 hour, then check job status
     → if completed: trigger Power BI refresh only when refresh_workspace_id + lakehouse_dataset_id are set
     → if failed: log for manual review (dormant retry logic available)
@@ -402,6 +401,14 @@ This sends a POST to the dbt-webhook Cloud Function as if dbt Cloud sent it. The
 - The webhook endpoint URL: `https://dbt-webhook-handler-gateway-6sk89xvx.uc.gateway.dev/dbt-webhook`
 
 **Trigger Fabric Notebook (US Donations, job 163545):**
+
+> **This runs the production notebook against prod data. It is not a smoke test.** The curl returns
+> 200 in milliseconds; the workflow then starts notebook `84bf60cb-…` in prod workspace `c2bafcfd-…`
+> (a full reload of every table, ~35-40 min) and reports the outcome about 1 hour later. Check it with
+> `gcloud workflows executions list fabric-job-workflow --location=us-central1 --project=cru-data-orchestration-prod`.
+> There is no way to test the Azure token without also starting the notebook. Publishing with
+> `enable_monitoring: false` in the payload still runs the notebook; it only skips the 1-hour status check.
+
 ```bash
 curl -s -X POST "https://dbt-webhook-handler-gateway-6sk89xvx.uc.gateway.dev/dbt-webhook" \
   -H "Content-Type: application/json" \
