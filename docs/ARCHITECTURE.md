@@ -57,17 +57,18 @@ Pub/Sub topic: fivetran-events
 dbt Cloud job completes successfully (status_code=10)
   → POST to dbt-webhook Cloud Function
     → verify signature, parse payload
-    → route by status: success → fabric topic, failure → retry topic
-    → map job_id → Fabric config
-    → publish to Pub/Sub topic: fabric-job-events
+    → route by status: success → dbt-job-completed (all successes), failure → dbt-retry-events
+    → also publish to fabric-job-events if the job has a Fabric mapping (legacy)
     → return 200 immediately
 
 Pub/Sub topic: fabric-job-events
   → Eventarc → Cloud Workflow (fabric-job-workflow)
     → get Azure credentials from Secret Manager
-    → trigger Fabric job (POST, expect 202 Accepted)
+    → trigger Fabric job (POST .../items/{item_id}/jobs/instances?jobType=..., expect 202 Accepted)
+      · jobType=RunNotebook sends the mapping's execution_data as the executionData body
+      · jobType=Execute (CopyJob) sends an empty JSON object (`{}`)
     → wait 1 hour, then check job status
-    → if completed: optionally trigger Power BI refresh
+    → if completed: trigger Power BI refresh only when refresh_workspace_id + lakehouse_dataset_id are set
     → if failed: log for manual review (dormant retry logic available)
 ```
 
@@ -328,7 +329,7 @@ It also applies an optional per-job **build-cadence gate** (`dbt_job_build_caden
 | `cloud-run-job-completed` | okta-sync, woo-sync, process-geography | cloud-run-job-dbt | Trigger dbt job after CloudRun job completes |
 | `fivetran-events` | fivetran-webhook | fivetran-dbt | Trigger dbt job after Fivetran sync completes |
 | `dbt-job-completed` | dbt-webhook (on success) | hightouch-workflow | Generic fan-out for all post-dbt orchestration |
-| `fabric-job-events` | dbt-webhook (on success, legacy for job 163545) | fabric-job-workflow | Trigger Fabric job after US Donations dbt job succeeds |
+| `fabric-job-events` | dbt-webhook (on success, legacy for job 163545) | fabric-job-workflow | Run the Fabric Notebook (jobType `RunNotebook`) after the US Donations dbt job succeeds |
 | `hightouch-completed` | hightouch-workflow | webhook-notify-workflow | Call the downstream webhook (named by the payload's `webhook_secret_name`) after a Hightouch sync completes |
 | `dbt-retry-events` | dbt-webhook (on failure) | dbt-retry-workflow | Retry transient dbt Cloud job failures |
 
@@ -399,7 +400,15 @@ This sends a POST to the dbt-webhook Cloud Function as if dbt Cloud sent it. The
 - The `DBT_WEBHOOK_SECRET` from 1Password or Secret Manager
 - The webhook endpoint URL: `https://dbt-webhook-handler-gateway-6sk89xvx.uc.gateway.dev/dbt-webhook`
 
-**Trigger Fabric (US Donations, job 163545):**
+**Trigger Fabric Notebook (US Donations, job 163545):**
+
+> **This runs the production notebook against prod data. It is not a smoke test.** The curl returns
+> 200 in milliseconds; the workflow then starts notebook `84bf60cb-…` in prod workspace `c2bafcfd-…`
+> (a full reload of every table, ~35-40 min) and reports the outcome about 1 hour later. Check it with
+> `gcloud workflows executions list fabric-job-workflow --location=us-central1 --project=cru-data-orchestration-prod`.
+> There is no way to test the Azure token without also starting the notebook. Publishing with
+> `enable_monitoring: false` in the payload still runs the notebook; it only skips the 1-hour status check.
+
 ```bash
 curl -s -X POST "https://dbt-webhook-handler-gateway-6sk89xvx.uc.gateway.dev/dbt-webhook" \
   -H "Content-Type: application/json" \

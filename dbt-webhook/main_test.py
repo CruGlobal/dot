@@ -156,9 +156,8 @@ def test_success_any_job_id_publishes(mock_publisher):
 # ---------------------------------------------------------------------------
 # Legacy Fabric dual-publish
 #
-# The real webhook_utils.map_dbt_to_fabric mapping is intentionally empty (no
-# job currently triggers a Fabric job). These tests patch map_dbt_to_fabric to
-# inject a mapped job so the dual-publish path stays covered for future entries.
+# These tests patch map_dbt_to_fabric to inject a mapped job so the dual-publish
+# path is covered independently of the real mapping table.
 # ---------------------------------------------------------------------------
 
 FABRIC_MAPPING = {
@@ -168,6 +167,105 @@ FABRIC_MAPPING = {
     "lakehouse_dataset_id": "test-lakehouse-dataset",
     "job_type": "Execute",
 }
+
+
+def test_us_donations_maps_to_fabric_notebook():
+    """dbt job 163545 (US Donations) maps to the prod Fabric Notebook run."""
+    from webhook_utils import map_dbt_to_fabric
+
+    config = map_dbt_to_fabric("163545")
+
+    assert config["workspace_id"] == "c2bafcfd-df3d-4383-8f76-aed296260453"
+    assert config["item_id"] == "84bf60cb-4059-4e20-b18a-120f640a121c"
+    assert config["job_type"] == "RunNotebook"
+    params = config["execution_data"]["parameters"]
+    assert params["environment"] == {"value": "prod", "type": "string"}
+    assert params["_inlineInstallationEnabled"] == {"value": True, "type": "bool"}
+    # No Power BI refresh for the notebook run
+    assert "refresh_workspace_id" not in config
+    assert "lakehouse_dataset_id" not in config
+
+
+def test_unmapped_job_returns_empty():
+    from webhook_utils import map_dbt_to_fabric
+
+    assert map_dbt_to_fabric("99999") == {}
+
+
+def test_fabric_message_passes_execution_data_and_tolerates_missing_refresh():
+    """Notebook config without refresh fields builds a message the workflow accepts."""
+    from webhook_utils import create_fabric_job_message
+
+    config = {
+        "workspace_id": "ws",
+        "item_id": "nb",
+        "job_type": "RunNotebook",
+        "execution_data": {"parameters": {"environment": {"value": "prod", "type": "string"}}},
+    }
+    dbt_info = {"job_id": "163545", "job_name": "US Donations", "run_id": "1"}
+
+    msg = create_fabric_job_message(config, dbt_info)
+
+    assert msg["workspace_id"] == "ws"
+    assert msg["item_id"] == "nb"
+    assert msg["job_type"] == "RunNotebook"
+    assert msg["execution_data"] == config["execution_data"]
+    # Empty strings make the workflow skip the Power BI refresh step
+    assert msg["refresh_workspace_id"] == ""
+    assert msg["lakehouse_dataset_id"] == ""
+    assert msg["source_job_id"] == "163545"
+    assert msg["execution_context"]["dbt_job_name"] == "US Donations"
+
+
+def test_fabric_message_copyjob_keeps_refresh_fields_and_null_execution_data():
+    """CopyJob-style config (no execution_data) still sends execution_data: null."""
+    from webhook_utils import create_fabric_job_message
+
+    msg = create_fabric_job_message(FABRIC_MAPPING, {"job_id": "1"})
+
+    assert msg["job_type"] == "Execute"
+    assert msg["refresh_workspace_id"] == "test-refresh-workspace"
+    assert msg["lakehouse_dataset_id"] == "test-lakehouse-dataset"
+    assert msg["execution_data"] is None
+
+
+@mock.patch.object(main, "publisher")
+def test_us_donations_success_publishes_notebook_message_end_to_end(mock_publisher):
+    """Job 163545 through webhook_handler (no mapping patch) publishes to both
+    topics, and the fabric-job-events body is the RunNotebook message."""
+    mock_future = mock.Mock()
+    mock_future.result.return_value = "msg-163545"
+    mock_publisher.publish.return_value = mock_future
+
+    payload = make_dbt_webhook_payload(status="Success", status_code=10, job_id="163545")
+    request = make_mock_request(payload)
+
+    response = main.webhook_handler(request)
+
+    assert response[1] == 200
+    assert mock_publisher.publish.call_count == 2
+
+    fabric_calls = [
+        c for c in mock_publisher.publish.call_args_list if "fabric-job-events" in c[0][0]
+    ]
+    assert len(fabric_calls) == 1
+    fabric_msg = json.loads(fabric_calls[0][0][1].decode("utf-8"))
+    assert fabric_msg["job_type"] == "RunNotebook"
+    assert fabric_msg["workspace_id"] == "c2bafcfd-df3d-4383-8f76-aed296260453"
+    assert fabric_msg["item_id"] == "84bf60cb-4059-4e20-b18a-120f640a121c"
+    assert fabric_msg["execution_data"]["parameters"]["environment"]["value"] == "prod"
+    assert fabric_msg["refresh_workspace_id"] == ""
+    assert fabric_msg["lakehouse_dataset_id"] == ""
+    assert fabric_msg["source_job_id"] == "163545"
+    assert fabric_calls[0][1]["job_id"] == "163545"
+
+
+def test_fabric_message_requires_job_type():
+    """A mapping entry without job_type must fail loudly, not guess a jobType."""
+    from webhook_utils import create_fabric_job_message
+
+    with pytest.raises(KeyError):
+        create_fabric_job_message({"workspace_id": "ws", "item_id": "it"}, {"job_id": "1"})
 
 
 @mock.patch.object(main, "map_dbt_to_fabric", return_value=FABRIC_MAPPING)

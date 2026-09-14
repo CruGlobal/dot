@@ -139,7 +139,8 @@ pytest -v
 ```
 
 The test suite covers:
-- Success routing (publishes to `fabric-job-events` topic)
+- Success routing (publishes to `dbt-job-completed`, plus `fabric-job-events` for mapped jobs)
+- Fabric mapping and message builder (US Donations → Fabric Notebook)
 - Failure routing (publishes to `dbt-retry-events` topic)
 - Cancelled/non-completion events (ignored)
 - Signature verification
