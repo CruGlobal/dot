@@ -13,5 +13,5 @@ jobs:
       function_name: dbt-webhook
       entry_point: webhook_handler
       runtime: python312
-      environment: ${{ github.ref == 'refs/heads/main' && 'production' || github.ref == 'refs/heads/poc' && 'poc' || github.ref == 'refs/heads/staging' && 'staging' }}
+      environment: ${{ github.ref == 'refs/heads/main' && 'production' || github.ref == 'refs/heads/poc' && 'poc' || github.ref == 'refs/heads/staging' && 'staging-legacy' }}
     secrets: inherit
