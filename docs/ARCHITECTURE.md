@@ -47,7 +47,7 @@ Pub/Sub topic: fivetran-events
   → Eventarc → Cloud Workflow (fivetran-dbt)
     → decode message; skip unless sync status == SUCCESSFUL   (DT-511)
     → map connector_id → dbt job_id
-    → per-job min-interval gate: skip if a recent successful/in-flight run exists   (DT-511)
+    → per-job build-window gate: skip if this window already has a gate-started build   (DT-736)
     → POST to dbt-trigger Cloud Function
 ```
 
@@ -104,7 +104,7 @@ Pub/Sub topic: dbt-retry-events
 **Key design decisions:**
 
 - **Transient-only, default-deny classification** (in `dbt-classify`) — retries only infrastructure/transient errors (e.g. the BigQuery `409 Already Exists: Job` collision, rate/quota limits, 5xx, deadline/connection errors) identified from `run_results.json`. Test failures, missing tables/columns, broken joins, and other invalid SQL are never retried. Anything that cannot be positively classified as transient is left for a human.
-- **Max 1 retry, enforced via `cause`** — `dbt-classify` reads the failed run's `trigger.cause` (`include_related=["trigger"]`): a run whose cause already starts with "Auto-retry" returns `prior_is_retry` and is not retried again. There is no `attempt_number` counter.
+- **Max 1 retry, enforced via `cause`** — `dbt-classify` reads the failed run's `trigger.cause` (`include_related=["trigger"]`): a run whose cause already starts with "Auto-retry" returns `prior_is_retry` and is not retried again. There is no `attempt_number` counter. The `fivetran-dbt` build-window gate also matches this exact text (`Auto-retry for transient failure in run <id>`) to count a retry of its own run toward a window, so don't reword it.
 - **Fail-closed** — if `dbt-classify` cannot read the run metadata it returns `metadata_unavailable`; the workflow then cannot confirm the run was not already a retry, so it does not retry. A missed retry of a genuine transient is cheap (re-run by hand); an uncapped retry loop is not.
 - **Multi-step cross-check** — `run_steps` is read to detect step-level errors; if a step errored but `run_results.json` explains no failed node, the failure is command-level/uncovered and is not retried.
 - **Dedup stays in the workflow** — the small list-runs check (skip as superseded if a newer run for the job already exists) is cheap and remains in the workflow; only the large-artifact read+classify moved to the function.
@@ -200,7 +200,7 @@ workflow_id = "projects/${module.project.project_id}/locations/us-central1/workf
 
 Once the workflow exists in state (after first apply), either form works. But since the first `atlantis apply` creates the workflow and the eventarc trigger together, the static string is required.
 
-**Workflow YAML uses `$${...}` for Cloud Workflows expressions.** Because `templatefile()` interprets `${...}` as Terraform interpolation, all Cloud Workflows expressions in YAML files must use the double-dollar escape: `$${variable_name}`. Terraform variables passed to the template use the normal single-dollar `${var_name}`.
+**Workflow YAML uses `$${...}` for Cloud Workflows expressions.** Terraform interprets `${...}` as interpolation both in `templatefile()` YAML files and in inline `<<EOF` heredocs (the `fivetran-dbt` source is one), so Cloud Workflows expressions there must use the double-dollar escape: `$${variable_name}`. Terraform variables use the normal single-dollar `${var_name}`. The one exception is a file inlined with `file()`, which Terraform does not template: `fivetran_dbt_window_start.yaml` (the `window_start` subworkflow, inlined into `fivetran-dbt`) uses plain `${...}`. Copying expressions between the two kinds of file breaks them silently.
 
 ```yaml
 # Terraform variable (resolved by templatefile):
@@ -238,7 +238,7 @@ Use this runbook when you want a Fivetran sync completion to trigger a dbt Cloud
 Cloud Scheduler (in functions.tf)
   → fivetran-trigger CF → starts Fivetran sync
   → Fivetran completes → fivetran-webhook CF → fivetran-events topic
-  → fivetran-dbt workflow → success filter + per-job min-interval gate (DT-511)
+  → fivetran-dbt workflow → success filter + per-job build-window gate (DT-736)
   → looks up connector_id in connector_to_dbt_mapping
   → dbt-trigger CF → runs dbt Cloud job
 ```
@@ -253,7 +253,7 @@ Cloud Scheduler (in functions.tf)
 
 2. **Look up the new job ID** in dbt Cloud (Deploy → Jobs → find by name → URL contains `/jobs/<ID>/`).
 
-3. **Set the Fivetran connector to manual schedule.** Critical precondition — without this, both Fivetran's native scheduler AND Cloud Scheduler will fire syncs, causing double dbt runs.
+3. **Set the Fivetran connector to manual schedule** when DOT schedules its syncs (step 4). Without this, both Fivetran's native scheduler and Cloud Scheduler fire syncs, causing double dbt runs. A connector left on its native Fivetran schedule skips steps 3 and 4 and relies on a build window (step 6) to limit builds; `el_ert` (`crossing_accidental`) works this way until DT-680 moves it to DOT-scheduled syncs.
 
    ```bash
    # Direct API call — the ~/bin/fivetran wrapper supports pause/resume but NOT schedule_type
@@ -288,27 +288,55 @@ Cloud Scheduler (in functions.tf)
 
    The value is a list — a single connector can fan out to multiple dbt jobs (see `supervision_narrowly` for an example).
 
-6. **(Optional) Throttle the build to the job's sync cadence** (DT-511) using the two maps in the same `workflow.tf`. Tag the job with a **cadence name** in `dbt_job_build_cadence` (keyed by dbt job id), and make sure that name exists in `build_cadence_min_interval_hours` (cadence name → min hours between builds). **Quote the job-id key** — it must be a string to match the job ids in `connector_to_dbt_mapping`; an unquoted number parses as an int, never matches, and silently leaves the job ungated.
+6. **(Optional) Limit when dbt builds** with a build window in `dbt_job_build_windows` in the same `workflow.tf`. List the job's **anchors**: UTC hours, optionally limited to weekdays (0 = Sunday … 6 = Saturday). A window runs from one anchor to the next, and the job builds once per window, on the first successful sync that finishes at or after the anchor. **Quote the job-id key**: an unquoted number parses as an int, never matches, and silently leaves the job building on every sync.
 
    ```yaml
-   # build_cadence_min_interval_hours -- cadence name -> min hours between builds.
-   #   value = the sync cadence MINUS a ~1h margin for day-to-day sync-completion drift
-   #   (a value equal to the cadence intermittently skips the build; see cru-terraform #11371).
-   "daily": 23
-   "twice_daily": 11
-   # dbt_job_build_cadence -- dbt job id -> cadence name (unlisted = every successful sync).
-   "<dbt_job_id>": "daily"    # <dbt_job_name>
+   # Once a day, after the 05:00 UTC sync:
+   "<dbt_job_id>": [{hour: 5}]
+   # Or, twice a day: after 11:00 UTC daily and after 17:00 UTC on weekdays:
+   "<dbt_job_id>": [{hour: 11}, {hour: 17, weekdays: [1, 2, 3, 4, 5]}]
    ```
 
-   Use this when the connector can sync more often than you want dbt to build — e.g. a Cloud Scheduler run plus a DT-561 valve force-sync on the same day. Add a new cadence entry for other frequencies, or give a long/variable-duration sync its own entry with more headroom. Omit the job from `dbt_job_build_cadence` to trigger on every successful sync (the default). A job tagged with a cadence name that isn't defined in `build_cadence_min_interval_hours` reverts to every-sync and is surfaced by the `DBT_TRIGGER_GATE_MISCONFIG` Datadog monitor. The gate fails open — a dbt Cloud API hiccup triggers rather than blocks.
+   Use this when the connector syncs more often than you want dbt to build: two Oracle syncs a day for redo-log retention, an hourly native schedule, or a DT-561 valve force-sync. Omit the job to build on every successful sync (the default).
 
-7. **PR, Atlantis plan, apply.** Expected plan: 1 add (the Cloud Scheduler) + 1 in-place update (the workflow's `source_contents`). If you see destroys, stop and investigate — your branch is probably behind master.
+   - **Each anchor must be an hour a sync starts** (the Cloud Scheduler cron from step 4, or the connector's own Fivetran schedule), and no sync may start before an anchor and finish after it, or that sync takes the new window's build. If you later move the cron, move the anchor with it.
+   - **For one build a day off a multi-sync connector, anchor on the sync whose data people need.** Rows from the other sync wait for the next window (with syncs at 06:00 and 18:00 and an anchor of 6, the 18:00 rows are built after the next day's 06:00 sync).
+   - **A wrong but valid hour does not page.** With syncs at 06:00 and 18:00, an anchor of 7 makes the job build after the 18:00 sync instead, and if the 06:00 sync sometimes runs past 07:00 the build moves between slots day to day. `DBT_TRIGGER_GATE_MISCONFIG` only catches malformed anchors.
+   - **After apply, confirm the first sync writes a `Build-window gate` log line for the job** (see the on-call notes below). No line means the key didn't match.
 
-### Trigger gate: success filter + build-cadence throttle (DT-511)
+7. **PR, Atlantis plan, apply.** Expected plan: 1 add (the Cloud Scheduler; 0 if the connector already has one) + 1 in-place update (the workflow's `source_contents`). If you see destroys, stop and investigate — your branch is probably behind master.
 
-The `fivetran-dbt` workflow triggers a dbt job **only when the Fivetran sync succeeded** — it reads `data.status` from the `sync_end` event and proceeds only on `SUCCESSFUL` (a missing/malformed status fails safe to no trigger). Failed or `RESCHEDULED` syncs no longer build on stale/partial data.
+### Trigger gate: success filter + build windows (DT-511, DT-736)
 
-It also applies an optional per-job **build-cadence gate** (`dbt_job_build_cadence` → `build_cadence_min_interval_hours` in `workflow.tf`, step 6 above): a job is tagged with a cadence name (e.g. `daily`), which resolves to a minimum number of hours between builds (the sync cadence minus a ~1h drift margin, so `daily` = 23 not 24). A job is skipped when it already has a successful or in-flight run within that window, collapsing a scheduled sync + a DT-561 valve force-sync down to one build per interval. Jobs not tagged default to trigger on every successful sync. The gate reads dbt Cloud run history (no new datastore) and **fails open** — any error fetching or parsing recent runs triggers rather than blocks. A failed last run does not satisfy the gate (retries are owned by the DT-568 auto-retry pipeline). A persistent fail-open is surfaced by the `DBT_TRIGGER_GATE_FAILOPEN` Datadog monitor, and a job tagged with an unknown cadence name (which reverts to every-sync) by the `DBT_TRIGGER_GATE_MISCONFIG` monitor. (Not fully closed: near-simultaneous Pub/Sub redelivery can still double-trigger — that would need an atomic store.)
+The `fivetran-dbt` workflow triggers a dbt job **only when the Fivetran sync succeeded**: it reads `data.status` from the `sync_end` event and proceeds only on `SUCCESSFUL` (a missing or malformed status fails safe to no trigger).
+
+A job listed in `dbt_job_build_windows` (step 6 above) builds **once per window**. On each successful `sync_end`, the gate finds the window the event falls in (the most recent active anchor at or before the event's `created` time, computed by the `window_start` subworkflow in `fivetran_dbt_window_start.yaml`), lists the job's last 10 dbt Cloud runs, and:
+
+- **counts only runs the gate started**, marked by the cause prefix `fivetran-dbt window: `, plus DT-568 auto-retries of those runs (`Auto-retry for transient failure in run <id>`). Manual runs and anything else are ignored, so a manual rerun never takes a window's build or moves the build to another sync slot;
+- **skips** if a counted run in this window succeeded or is still running;
+- **stops re-triggering** after 2 failed gate-started builds in the window (an hourly connector would otherwise retry a broken build every hour);
+- otherwise **triggers**, stamping the gate's cause so the run counts.
+
+**Events** (`events_prod`, 1013020) is built this way, off `el_ert`'s native hourly sync, with anchors `[{hour: 11}, {hour: 17, weekdays: [1, 2, 3, 4, 5]}]`; it has no `dbt_trigger` cron.
+
+**Every gate error fails open** (the job triggers), in one of two ways:
+
+- **The build counts toward the window** (the gate cause is stamped): the runs list can't be fetched or evaluated, runs come back without trigger data (`cause_filter_blind`), or the 10 runs don't reach back to the window start (`run_history_page_too_short`).
+- **The build does not count** (the default cause is used), so each later sync in the window builds again: the dbt token is unavailable (the gate is off for that execution), the window can't be computed, the anchors are invalid (`DBT_TRIGGER_GATE_MISCONFIG`), or the cause can't be built (this last case logs nothing).
+
+A persistent fail-open alerts through the Datadog monitor "DSE dbt trigger gate failing open (build-window gate not evaluating)"; invalid anchors through "DSE dbt trigger gate misconfigured (invalid build-window anchors)". (Not fully closed: two Pub/Sub deliveries seconds apart, before the first run shows in the dbt API, can both trigger.)
+
+**On call: "why did or didn't a job build?"**
+
+- Read the `fivetran-dbt` workflow logs in `cru-data-orchestration-prod`, filtered by the job id (e.g. `163545` for `us_donations_prod`):
+  ```bash
+  gcloud logging read 'resource.type="workflows.googleapis.com/Workflow" AND resource.labels.workflow_id="fivetran-dbt" AND jsonPayload.job_id="163545"' \
+    --project=cru-data-orchestration-prod --limit=10 --format="value(timestamp,jsonPayload.decision,jsonPayload.reason,jsonPayload.alert_type,jsonPayload.deciding_run_id)"
+  ```
+- Normal lines carry `decision` (`build` / `skip`) and `reason`: `window_not_built`, `window_build_failed_retrying`, `window_already_built`, `window_attempts_exhausted`. Fail-open lines carry `alert_type: DBT_TRIGGER_GATE_FAILOPEN` or `DBT_TRIGGER_GATE_MISCONFIG` instead of `decision`; the token-unavailable line has no `job_id`.
+- **No gate line at all** for a sync means the gate never evaluated the job: the sync wasn't `SUCCESSFUL` (visible only in the execution's return output), the connector isn't in `connector_to_dbt_mapping`, or the job-id key in `dbt_job_build_windows` didn't match.
+- **`window_already_built` because of a stuck run:** `deciding_run_id` names it. Cancel it in dbt Cloud and the next sync in the window builds.
+- A manual rerun needs no timing: it can't knock out the next scheduled build. After a **failed** window build, a manual fix does not count, so the next sync in that window builds again, along with anything that hangs off the job (for `us_donations_prod`, the extract jobs and the Fabric chain).
 
 ## Infrastructure Reference
 
