@@ -169,9 +169,9 @@ growth between syncs. Sequence: land and prove the valve first, then relax `sync
 Headroom is large, so this is low-risk: source-freshness tolerances are wide (MPDX
 `warn 1d / error 10d`; Global Registry and Global Registry Flat `warn 7d / error 14d`), the
 connectors currently sync hourly, and the downstream warehouse builds run on their own
-schedules. Downstream dbt builds are intentionally decoupled from Fivetran `sync_end` (they
-run on independent schedules to control BigQuery cost), so valve-triggered syncs do not fan
-out extra builds. **Decision (review): reduce to once per day — not less than daily.** Daily
+schedules. Where a dbt job is triggered by `sync_end`, the `fivetran-dbt` build-window gate
+(see ARCHITECTURE.md, "Trigger gate") limits it to one build per window, so valve-triggered
+syncs do not fan out extra builds. **Decision (review): reduce to once per day — not less than daily.** Daily
 sits well inside the freshness tolerances above, and the architect set daily as the floor.
 
 **Schedule placement (the chosen cost mitigation).** Place each daily sync **outside the
@@ -210,7 +210,7 @@ Fivetran-native. Audit of active `postgres_rds` connectors and their DOT-migrati
 - `entrench_security` — `el_summer_missions` — **onboarding** (DT-561 Phase 1)
 - `communal_whoops` — `el_ert` (stage) — **onboarding** (DT-561 Phase 1)
 - `committee_persisting`, `define_uncooked` — `el_ministry_managed_domains` — pending (later phase)
-- `crossing_accidental` — `el_ert` (prod) — pending (later phase)
+- `crossing_accidental` — `el_ert` (prod) — pending (later phase). Already mapped to `events_prod` (1013020) in `fivetran-dbt` with build windows at 11:00 UTC daily and 17:00 UTC on weekdays; when it moves to DOT-scheduled syncs (DT-680), start them at 11:00 and 17:00 UTC so each sync opens its window, and add `ERT - Daily` (25105) to the existing mapping rather than recreating it.
 - `furniture_magnanimous` — `el_staff_accounting_uat` — pending
 - `hesitate_fret` — `el_cap` — pending (later phase)
 
