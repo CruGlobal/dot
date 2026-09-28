@@ -19,8 +19,23 @@ logger.propagate = False
 bigquery_project_name = os.environ.get("BIGQUERY_PROJECT_NAME", None)
 bigquery_dataset_name = os.environ.get("BIGQUERY_DATASET_NAME", None)
 google_cloud_project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", None)
-client = BigQueryClient(project=bigquery_project_name)
+_bigquery_client = None
+
+
+def get_bigquery_client() -> BigQueryClient:
+    """Create the BigQuery client on first use, not at import time, so the
+    module can be imported (for tests) without Google credentials."""
+    global _bigquery_client
+    if _bigquery_client is None:
+        _bigquery_client = BigQueryClient(project=bigquery_project_name)
+    return _bigquery_client
 dbt_job_number = "32227"
+
+# GeoNames account login form. The redesigned site (Sep 2026) no longer accepts
+# HTTP basic auth for premium data downloads. It wants a browser style login
+# that sets a session cookie. We log in once and reuse the session.
+GEONAMES_LOGIN_URL = "https://www.geonames.org/servlet/geonames"
+_geonames_session = None
 
 
 class CloudLoggingFormatter(logging.Formatter):
@@ -99,6 +114,77 @@ def get_authentication(url: str) -> Tuple[Dict[str, str], Any]:
         return url, None
 
     return url, auth
+
+
+def _page_text(html: str) -> str:
+    """Strip tags and squeeze whitespace so an HTML error page fits in one log line."""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip()
+
+
+def _download(url: str, auth: Any) -> requests.Response:
+    """Fetch a URL. GeoNames uses the logged in session cookie first, then
+    falls back to basic auth if the cookie is refused. Other hosts use auth
+    as given."""
+    if "geonames" not in urlparse(url).netloc:
+        return requests.get(url, auth=auth, stream=True)
+
+    session = get_geonames_session()
+    r = session.get(url, stream=True)
+    if r.status_code == 401:
+        logger.warning(
+            f"GeoNames refused the session cookie for {url} (401). "
+            f"Page says: {_page_text(r.text)[:300]!r}. Retrying with basic auth."
+        )
+        r.close()
+        r = session.get(url, auth=auth, stream=True)
+        if r.status_code == 401:
+            logger.error(
+                f"GeoNames refused basic auth too for {url} (401). "
+                f"Page says: {_page_text(r.text)[:300]!r}"
+            )
+    return r
+
+
+def get_geonames_session() -> requests.Session:
+    """Return a requests session that is logged in to geonames.org.
+
+    Logs in once with the account form so the session carries the GeoNames
+    cookie. Later requests on the session also send basic auth, so the old
+    download path keeps working if GeoNames ever accepts it again. If the
+    form login fails for a network reason we log a warning and still return
+    the session, so the download can try with basic auth only.
+    """
+    global _geonames_session
+    if _geonames_session is not None:
+        return _geonames_session
+
+    session = requests.Session()
+    username = os.environ.get("GEONAMES_USERNAME", "").strip()
+    password = os.environ.get("GEONAMES_PASSWORD", "").strip()
+    try:
+        response = session.post(
+            GEONAMES_LOGIN_URL,
+            data={
+                "username": username,
+                "password": password,
+                "srv": "12",
+                "rememberme": "1",
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+        page = _page_text(response.text)
+        looks_logged_in = "logout" in page.lower() and username.lower() in page.lower()
+        logger.info(
+            f"GeoNames form login returned {response.status_code}; "
+            f"session cookies: {sorted(session.cookies.keys())}; "
+            f"looks logged in: {looks_logged_in}; page says: {page[:300]!r}"
+        )
+    except requests.RequestException as e:
+        logger.warning(f"GeoNames form login failed, trying basic auth only: {e}")
+
+    _geonames_session = session
+    return session
 
 
 def get_dtype_mapping() -> Dict[str, str]:
@@ -217,7 +303,7 @@ def load_to_dataframe(
         dtypes = create_dtype_dict(schema, dtype_mapping)
         num_columns = len(schema)
 
-        with requests.get(url, auth=auth, stream=True) as r:
+        with _download(url, auth) as r:
             r.raise_for_status()
             file_bytes = io.BytesIO(r.content)
 
@@ -281,7 +367,7 @@ def process_geo_admin_1_codes():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -302,7 +388,7 @@ def process_geo_admin_2_codes():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -321,7 +407,7 @@ def process_geo_admincode_5():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -357,7 +443,7 @@ def process_geo_all_countries():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -379,7 +465,7 @@ def process_geo_all_countries_deleted():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -416,7 +502,7 @@ def process_geo_all_countries_modified():
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema)
     df["modification_date"] = pd.to_datetime(df["modification_date"]).dt.date
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -436,7 +522,7 @@ def process_geo_alternate_names_deleted():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -465,7 +551,7 @@ def process_geo_alternate_names_modified():
         ["alternate_name", "string"],
         ["modification_date", "date"],
     ]
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -494,7 +580,7 @@ def process_geo_alternate_names_v_2():
     df = load_to_dataframe(
         url, schema, skip_header_rows=0, file_name_regex=r"^alternateNamesV2"
     )
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -531,7 +617,7 @@ def process_geo_country_info():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=50)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -551,7 +637,7 @@ def process_geo_feature_codes():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -571,7 +657,7 @@ def process_geo_hierarchy():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -592,7 +678,7 @@ def process_geo_iso_language_codes():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -614,7 +700,7 @@ def process_geo_time_zones():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
