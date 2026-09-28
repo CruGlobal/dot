@@ -5,8 +5,10 @@ import io
 from unittest import mock
 import logging
 import sys
+import main
 from main import (
     get_authentication,
+    get_geonames_session,
     load_to_dataframe,
     read_csv_from_bytes,
     process_zip_file,
@@ -29,6 +31,14 @@ def mock_env_vars(monkeypatch):
     monkeypatch.setenv("GEONAMES_USERNAME", "test_user")
     monkeypatch.setenv("GEONAMES_PASSWORD", "test_pass")
     monkeypatch.setenv("MAXMIND_LICENSE_KEY", "test_key")
+
+
+@pytest.fixture(autouse=True)
+def reset_geonames_session():
+    """Each test starts without a cached GeoNames session."""
+    main._geonames_session = None
+    yield
+    main._geonames_session = None
 
 
 @pytest.fixture(autouse=True)
@@ -153,3 +163,64 @@ def test_process_zip_file_no_matching_file():
 
     assert mock_zip.namelist.call_count == 2
     mock_zip.open.assert_not_called()
+
+
+@responses.activate
+def test_load_to_dataframe_geonames_logs_in_once(sample_schema, mock_env_vars):
+    """GeoNames downloads log in with the account form first, then reuse the
+    session cookie. Basic auth is still sent with each download."""
+    mock_content = b"column1\tcolumn2\tcolumn3\na\t1\t1.1\nb\t2\t2.2"
+    responses.add(
+        responses.POST,
+        main.GEONAMES_LOGIN_URL,
+        status=200,
+        headers={"Set-Cookie": "JSESSIONID=abc123; Path=/"},
+    )
+    responses.add(
+        responses.GET,
+        "https://www.geonames.org/premiumdata/latest/a.txt",
+        body=mock_content,
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        "https://www.geonames.org/premiumdata/latest/b.txt",
+        body=mock_content,
+        status=200,
+    )
+
+    df_a = load_to_dataframe(
+        url="https://www.geonames.org/premiumdata/latest/a.txt",
+        schema=sample_schema,
+        skip_header_rows=1,
+    )
+    df_b = load_to_dataframe(
+        url="https://www.geonames.org/premiumdata/latest/b.txt",
+        schema=sample_schema,
+        skip_header_rows=1,
+    )
+
+    assert isinstance(df_a, pd.DataFrame)
+    assert isinstance(df_b, pd.DataFrame)
+    # One login, then two downloads.
+    assert [c.request.method for c in responses.calls] == ["POST", "GET", "GET"]
+    login = responses.calls[0].request
+    assert "username=test_user" in login.body
+    assert "password=test_pass" in login.body
+    assert "srv=12" in login.body
+    download = responses.calls[1].request
+    assert download.headers.get("Cookie", "").startswith("JSESSIONID=abc123")
+    assert download.headers.get("Authorization", "").startswith("Basic ")
+
+
+@responses.activate
+def test_geonames_session_survives_login_failure(mock_env_vars):
+    """A network error on the login form must not stop the download attempt."""
+    responses.add(
+        responses.POST,
+        main.GEONAMES_LOGIN_URL,
+        body=main.requests.exceptions.ConnectionError("boom"),
+    )
+    session = get_geonames_session()
+    assert isinstance(session, main.requests.Session)
+    assert main._geonames_session is session
