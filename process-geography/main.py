@@ -19,7 +19,16 @@ logger.propagate = False
 bigquery_project_name = os.environ.get("BIGQUERY_PROJECT_NAME", None)
 bigquery_dataset_name = os.environ.get("BIGQUERY_DATASET_NAME", None)
 google_cloud_project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", None)
-client = BigQueryClient(project=bigquery_project_name)
+_bigquery_client = None
+
+
+def get_bigquery_client() -> BigQueryClient:
+    """Create the BigQuery client on first use, not at import time, so the
+    module can be imported (for tests) without Google credentials."""
+    global _bigquery_client
+    if _bigquery_client is None:
+        _bigquery_client = BigQueryClient(project=bigquery_project_name)
+    return _bigquery_client
 dbt_job_number = "32227"
 
 # GeoNames account login form. The redesigned site (Sep 2026) no longer accepts
@@ -358,7 +367,7 @@ def process_geo_admin_1_codes():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -379,7 +388,7 @@ def process_geo_admin_2_codes():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -398,7 +407,7 @@ def process_geo_admincode_5():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -434,7 +443,7 @@ def process_geo_all_countries():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -456,7 +465,7 @@ def process_geo_all_countries_deleted():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -493,7 +502,7 @@ def process_geo_all_countries_modified():
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema)
     df["modification_date"] = pd.to_datetime(df["modification_date"]).dt.date
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -513,7 +522,7 @@ def process_geo_alternate_names_deleted():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -542,7 +551,7 @@ def process_geo_alternate_names_modified():
         ["alternate_name", "string"],
         ["modification_date", "date"],
     ]
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -571,7 +580,7 @@ def process_geo_alternate_names_v_2():
     df = load_to_dataframe(
         url, schema, skip_header_rows=0, file_name_regex=r"^alternateNamesV2"
     )
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -608,7 +617,7 @@ def process_geo_country_info():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=50)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -628,7 +637,7 @@ def process_geo_feature_codes():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -648,7 +657,7 @@ def process_geo_hierarchy():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -669,7 +678,7 @@ def process_geo_iso_language_codes():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema, skip_header_rows=0)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
@@ -691,7 +700,7 @@ def process_geo_time_zones():
     ]
     logger.info(f"Processing {table_name}...")
     df = load_to_dataframe(url, schema)
-    client.upload_from_dataframe(
+    get_bigquery_client().upload_from_dataframe(
         df,
         bigquery_dataset_name,
         table_name,
