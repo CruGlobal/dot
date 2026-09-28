@@ -1,2 +1,5 @@
 functions-framework==3.4.0
-google-cloud-pubsub==2.18.1
+# >=2.23 (was ==2.18.1): the 2.18.1 pin needs protobuf<5, which conflicts with
+# woo-sync's protobuf>=5.29.3 in the combined platform image. Only the stable
+# PublisherClient.publish surface is used.
+google-cloud-pubsub>=2.23.0

@@ -10,6 +10,7 @@ import time
 import psutil
 from datetime import datetime, timezone
 from bigquery_client import BigQueryClient
+from dot_shared import blackout
 from typing import Tuple, List, Dict, Any
 from google.cloud import bigquery
 from decimal import Decimal, getcontext
@@ -1356,6 +1357,13 @@ def trigger_sync():
     This function will be called when the job is triggered.
     """
     setup_logging()
+    blackout.log_status()
+
+    # Deliberate skip -> exit 0 (success); the structured log is the record.
+    # Only CRU_BLACKOUT_FORCE bypasses (set it as an override on a manual invoke).
+    if blackout.check("job", "woo-sync"):
+        sys.exit(0)
+
     logger.info("Starting Woo API data synchronization job")
 
     try:
