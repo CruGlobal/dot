@@ -107,6 +107,35 @@ def get_authentication(url: str) -> Tuple[Dict[str, str], Any]:
     return url, auth
 
 
+def _page_text(html: str) -> str:
+    """Strip tags and squeeze whitespace so an HTML error page fits in one log line."""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip()
+
+
+def _download(url: str, auth: Any) -> requests.Response:
+    """Fetch a URL. GeoNames uses the logged in session cookie first, then
+    falls back to basic auth if the cookie is refused. Other hosts use auth
+    as given."""
+    if "geonames" not in urlparse(url).netloc:
+        return requests.get(url, auth=auth, stream=True)
+
+    session = get_geonames_session()
+    r = session.get(url, stream=True)
+    if r.status_code == 401:
+        logger.warning(
+            f"GeoNames refused the session cookie for {url} (401). "
+            f"Page says: {_page_text(r.text)[:300]!r}. Retrying with basic auth."
+        )
+        r.close()
+        r = session.get(url, auth=auth, stream=True)
+        if r.status_code == 401:
+            logger.error(
+                f"GeoNames refused basic auth too for {url} (401). "
+                f"Page says: {_page_text(r.text)[:300]!r}"
+            )
+    return r
+
+
 def get_geonames_session() -> requests.Session:
     """Return a requests session that is logged in to geonames.org.
 
@@ -135,9 +164,12 @@ def get_geonames_session() -> requests.Session:
             timeout=60,
         )
         response.raise_for_status()
+        page = _page_text(response.text)
+        looks_logged_in = "logout" in page.lower() and username.lower() in page.lower()
         logger.info(
             f"GeoNames form login returned {response.status_code}; "
-            f"session cookies: {sorted(session.cookies.keys())}"
+            f"session cookies: {sorted(session.cookies.keys())}; "
+            f"looks logged in: {looks_logged_in}; page says: {page[:300]!r}"
         )
     except requests.RequestException as e:
         logger.warning(f"GeoNames form login failed, trying basic auth only: {e}")
@@ -262,14 +294,7 @@ def load_to_dataframe(
         dtypes = create_dtype_dict(schema, dtype_mapping)
         num_columns = len(schema)
 
-        # GeoNames needs a logged in session (cookie). Other hosts use plain requests.
-        http = (
-            get_geonames_session()
-            if "geonames" in urlparse(url).netloc
-            else requests
-        )
-
-        with http.get(url, auth=auth, stream=True) as r:
+        with _download(url, auth) as r:
             r.raise_for_status()
             file_bytes = io.BytesIO(r.content)
 

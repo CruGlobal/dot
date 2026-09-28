@@ -210,7 +210,27 @@ def test_load_to_dataframe_geonames_logs_in_once(sample_schema, mock_env_vars):
     assert "srv=12" in login.body
     download = responses.calls[1].request
     assert download.headers.get("Cookie", "").startswith("JSESSIONID=abc123")
-    assert download.headers.get("Authorization", "").startswith("Basic ")
+    # Cookie only on the first try. Basic auth is the fallback, not the default.
+    assert "Authorization" not in download.headers
+
+
+@responses.activate
+def test_load_to_dataframe_geonames_falls_back_to_basic_auth(
+    sample_schema, mock_env_vars
+):
+    """If GeoNames refuses the cookie with 401, retry once with basic auth."""
+    mock_content = b"column1\tcolumn2\tcolumn3\na\t1\t1.1"
+    url = "https://www.geonames.org/premiumdata/latest/a.txt"
+    responses.add(responses.POST, main.GEONAMES_LOGIN_URL, status=200)
+    responses.add(responses.GET, url, body="<html>no such user</html>", status=401)
+    responses.add(responses.GET, url, body=mock_content, status=200)
+
+    df = load_to_dataframe(url=url, schema=sample_schema, skip_header_rows=1)
+
+    assert isinstance(df, pd.DataFrame)
+    assert [c.request.method for c in responses.calls] == ["POST", "GET", "GET"]
+    assert "Authorization" not in responses.calls[1].request.headers
+    assert responses.calls[2].request.headers["Authorization"].startswith("Basic ")
 
 
 @responses.activate
