@@ -22,6 +22,12 @@ google_cloud_project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", None)
 client = BigQueryClient(project=bigquery_project_name)
 dbt_job_number = "32227"
 
+# GeoNames account login form. The redesigned site (Sep 2026) no longer accepts
+# HTTP basic auth for premium data downloads. It wants a browser style login
+# that sets a session cookie. We log in once and reuse the session.
+GEONAMES_LOGIN_URL = "https://www.geonames.org/servlet/geonames"
+_geonames_session = None
+
 
 class CloudLoggingFormatter(logging.Formatter):
     """
@@ -99,6 +105,45 @@ def get_authentication(url: str) -> Tuple[Dict[str, str], Any]:
         return url, None
 
     return url, auth
+
+
+def get_geonames_session() -> requests.Session:
+    """Return a requests session that is logged in to geonames.org.
+
+    Logs in once with the account form so the session carries the GeoNames
+    cookie. Later requests on the session also send basic auth, so the old
+    download path keeps working if GeoNames ever accepts it again. If the
+    form login fails for a network reason we log a warning and still return
+    the session, so the download can try with basic auth only.
+    """
+    global _geonames_session
+    if _geonames_session is not None:
+        return _geonames_session
+
+    session = requests.Session()
+    username = os.environ.get("GEONAMES_USERNAME", "").strip()
+    password = os.environ.get("GEONAMES_PASSWORD", "").strip()
+    try:
+        response = session.post(
+            GEONAMES_LOGIN_URL,
+            data={
+                "username": username,
+                "password": password,
+                "srv": "12",
+                "rememberme": "1",
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+        logger.info(
+            f"GeoNames form login returned {response.status_code}; "
+            f"session cookies: {sorted(session.cookies.keys())}"
+        )
+    except requests.RequestException as e:
+        logger.warning(f"GeoNames form login failed, trying basic auth only: {e}")
+
+    _geonames_session = session
+    return session
 
 
 def get_dtype_mapping() -> Dict[str, str]:
@@ -217,7 +262,14 @@ def load_to_dataframe(
         dtypes = create_dtype_dict(schema, dtype_mapping)
         num_columns = len(schema)
 
-        with requests.get(url, auth=auth, stream=True) as r:
+        # GeoNames needs a logged in session (cookie). Other hosts use plain requests.
+        http = (
+            get_geonames_session()
+            if "geonames" in urlparse(url).netloc
+            else requests
+        )
+
+        with http.get(url, auth=auth, stream=True) as r:
             r.raise_for_status()
             file_bytes = io.BytesIO(r.content)
 
