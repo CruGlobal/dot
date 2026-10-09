@@ -107,11 +107,13 @@ def test_sync_data_success(mock_csv, mock_upload, mock_schema, mock_request, moc
 @patch('main.replace_dataset_bigquery')
 @patch('main.sync_all_users')
 @patch('main.sync_data')
-def test_trigger_sync_success(mock_sync_data, mock_sync_users, mock_replace, mock_publish):
+@patch('main.sync_system_log')
+def test_trigger_sync_success(mock_sync_log, mock_sync_data, mock_sync_users, mock_replace, mock_publish):
     """Test successful trigger_sync execution"""
 
     trigger_sync()
 
+    mock_sync_log.assert_called_once_with("cru-data-warehouse-elt-prod", "temp_okta", "el_okta")
     # Verify all sync operations were called
     assert mock_sync_data.call_count == 3  # apps, users, groups
     assert mock_sync_users.call_count == 2  # group_members, app_users
@@ -121,12 +123,30 @@ def test_trigger_sync_success(mock_sync_data, mock_sync_users, mock_replace, moc
 
 @patch('main.setup_logging')
 @patch('main.sync_data')
-def test_trigger_sync_failure(mock_sync_data, mock_setup_logging):
+@patch('main.sync_system_log')
+def test_trigger_sync_failure(mock_sync_log, mock_sync_data, mock_setup_logging):
     """Test trigger_sync handles exceptions"""
     mock_sync_data.side_effect = Exception("Test error")
     
     with pytest.raises(Exception, match="Test error"):
         trigger_sync()
+
+
+@patch('main.publish_pubsub_message')
+@patch('main.replace_dataset_bigquery')
+@patch('main.sync_all_users')
+@patch('main.sync_data')
+@patch('main.sync_system_log')
+def test_trigger_sync_continues_when_system_log_fails(mock_sync_log, mock_sync_data, mock_sync_users, mock_replace, mock_publish):
+    """A System Log failure must not block the directory sync or the dbt trigger"""
+    mock_sync_log.side_effect = RuntimeError("403 Forbidden")
+
+    trigger_sync()
+
+    assert mock_sync_data.call_count == 3
+    assert mock_sync_users.call_count == 2
+    mock_replace.assert_called_once()
+    mock_publish.assert_called_once_with({"job_id": "85521"}, "cloud-run-job-completed")
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ from okta_sync_utils import (
     query_bigquery_as_dataframe,
     upload_to_gcs,
 )
+from system_log import sync_system_log
 
 DEFAULT_PAGE_BATCH_SIZE = 50  # ~10K records per batch (~200 records/page)
 DEFAULT_USER_PAGE_BATCH_SIZE = 50  # Pages per batch for user/member data
@@ -1108,6 +1109,15 @@ def trigger_sync():
     log_memory_usage("- Job Start")
 
     try:
+        # The System Log sync is small and runs first so a long directory sync
+        # never delays it. A failure here must not block the directory sync.
+        ci = SingletonConfig()
+        try:
+            sync_system_log(ci.project_id, ci.dataset_id, ci.target_dataset_id)
+        except Exception:
+            logger.exception("Okta System Log sync failed; continuing with the directory sync")
+        log_memory_usage("- After System Log Sync")
+
         sync_data("apps")
         log_memory_usage("- After Apps Sync")
 
