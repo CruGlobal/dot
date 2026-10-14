@@ -78,6 +78,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the push-not-poll pattern, 
 | `dbt-webhook/` | Receives dbt Cloud webhooks. Routes success → Fabric, failure → retry. |
 | `fivetran-trigger/` | Triggers Fivetran sync jobs |
 | `fivetran-webhook/` | Receives Fivetran webhook callbacks |
+| `gcp-iam-sync/` | Cloud Run job. Nightly export of IAM bindings on the configured projects and their BigQuery datasets and tables into `el_gcp_iam` (dse-dbt `raw_gcp_iam_*`). A level with any unreadable object is not written and the run fails. |
 | `gsheets-trigger/` | Syncs data from Google Sheets |
 | `process-geography/` | Processes geography data in BigQuery |
 | `woo-sync/` | Syncs WooCommerce data |
