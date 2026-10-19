@@ -39,10 +39,12 @@ class FakeProjects:
         self.policies = policies
         self.errors = errors or {}
         self.requested_versions = []
+        self.projects_requested = []
 
     def get_iam_policy(self, request, retry=None):
         self.requested_versions.append(request["options"]["requested_policy_version"])
         project = request["resource"].split("/", 1)[1]
+        self.projects_requested.append(project)
         if project in self.errors:
             raise self.errors[project]
         bindings = [SimpleNamespace(role=role, members=list(member_list)) for role, member_list in self.policies[project]]
@@ -59,6 +61,8 @@ class FakeBigQuery:
         self.errors = errors or {}
         self.load_error = load_error
         self.listed_tables = []
+        self.policies_requested = []
+        self.datasets_requested = []
         self.loads = {}
 
     def _raise_if_configured(self, method, object_id):
@@ -70,6 +74,7 @@ class FakeBigQuery:
         return [SimpleNamespace(dataset_id=dataset_id) for dataset_id in self.datasets.get(project, {})]
 
     def get_dataset(self, dataset_ref, retry=None):
+        self.datasets_requested.append(dataset_ref)
         self._raise_if_configured("get_dataset", dataset_ref)
         project, dataset_id = dataset_ref.split(".")
         return SimpleNamespace(access_entries=self.datasets[project][dataset_id])
@@ -80,6 +85,7 @@ class FakeBigQuery:
         return [SimpleNamespace(table_id=table_id) for table_id in self.tables.get(dataset_ref, [])]
 
     def get_iam_policy(self, table_ref, retry=None):
+        self.policies_requested.append(table_ref)
         self._raise_if_configured("get_iam_policy", table_ref)
         bindings = [{"role": role, "members": set(member_list)} for role, member_list in self.table_policies.get(table_ref, [])]
         return SimpleNamespace(bindings=bindings)
@@ -299,10 +305,42 @@ def test_unreadable_table_skips_only_the_table_level():
     assert run_world(projects, bq) is False
     assert set(bq.loads) == {"iam_policy_projects", "iam_policy_datasets"}
 
+    bq.policies_requested.clear()
     tables = main.collect(["p1"], projects, bq)[main.TABLES]
     assert tables.gone == []
-    assert tables.rows, "t2 was read, so only the failure keeps the level from being written"
     assert tables.failures == ["table p1.mart_registry.t1: Forbidden: 403 denied"]
+    assert bq.policies_requested == ["p1.mart_registry.t1"], "reading stops at the level's first failure"
+
+
+def test_project_level_stops_reading_at_its_first_failure():
+    projects, bq = build_world(project_errors={"p_bad": exceptions.Forbidden("denied")})
+    projects.policies["p2"] = projects.policies["p1"]
+    bq.datasets["p_bad"] = {}
+    bq.datasets["p2"] = {}
+
+    main.collect(["p_bad", "p2"], projects, bq)
+    assert projects.projects_requested == ["p_bad"]
+
+
+def test_dataset_level_stops_reading_at_its_first_failure():
+    projects, bq = build_world(errors={("get_dataset", "p1.mart_registry"): exceptions.Forbidden("denied")})
+
+    main.collect(["p1"], projects, bq)
+    assert bq.datasets_requested == ["p1.mart_registry"]
+
+
+def test_dbt_temporary_and_backup_tables_are_not_read():
+    projects, bq = build_world()
+    bq.tables["p1.mart_registry"] += ["orders__dbt_tmp", "orders__dbt_backup"]
+    run_world(projects, bq)
+    assert not any(ref.endswith(main.SKIPPED_TABLE_SUFFIXES) for ref in bq.policies_requested)
+
+
+def test_google_managed_service_accounts_are_typed_service_account():
+    assert members.dataset_member("userByEmail", "123-compute@developer.gserviceaccount.com") == (
+        "serviceAccount",
+        "123-compute@developer.gserviceaccount.com",
+    )
 
 
 def test_dataset_deleted_mid_run_counts_as_gone_not_failed():
@@ -345,12 +383,14 @@ def test_dataset_with_no_access_entries_fails_its_level():
 
 def test_too_many_objects_disappearing_fails_the_level():
     projects, bq = build_world()
-    many = [f"t{n}" for n in range(main.GONE_LIMIT_PER_LEVEL + 1)]
+    many = [f"vanished_{n}" for n in range(main.GONE_LIMIT_PER_LEVEL + 1)]
     bq.tables["p1.mart_registry"] += many
     bq.errors.update({("get_iam_policy", f"p1.mart_registry.{t}"): exceptions.NotFound("gone") for t in many})
 
     assert run_world(projects, bq) is False
     assert "iam_policy_tables" not in bq.loads
+    tables = main.collect(["p1"], projects, bq)[main.TABLES]
+    assert tables.rows, "t1 and t2 were read, so only the vanished count keeps the level from being written"
 
 
 def test_a_few_objects_disappearing_is_tolerated_and_named():
@@ -384,6 +424,7 @@ def test_write_failure_fails_the_run_but_other_levels_still_write():
         (exceptions.Forbidden("rate", errors=[{"reason": "rateLimitExceeded"}]), True),
         (exceptions.Forbidden("denied", errors=[{"reason": "accessDenied"}]), False),
         (exceptions.NotFound("missing"), False),
+        (requests.exceptions.SSLError("bad certificate"), False),
         (requests.exceptions.ConnectionError("reset"), True),
         (requests.exceptions.Timeout("slow"), True),
         (requests.exceptions.ChunkedEncodingError("cut off"), True),

@@ -67,14 +67,14 @@ def _resource_name(entity_type: str, entity_id: Mapping[str, Any]) -> str:
 def dataset_member(entity_type: str, entity_id: Any) -> tuple[str, str]:
     """Returns (type, member) for one dataset access entry.
 
-    Service accounts are typed by their address and `userByEmail` becomes `user`, as the export
-    has always written them. Authorized views, datasets and routines are named as
-    `project.dataset[.object]`.
+    Service accounts are typed by their address, including Google-managed ones such as
+    `...@developer.gserviceaccount.com`, and `userByEmail` becomes `user`. Authorized views,
+    datasets and routines are named as `project.dataset[.object]`.
     """
     if isinstance(entity_id, Mapping):
         return entity_type, _resource_name(entity_type, entity_id)
     member = "" if entity_id is None else str(entity_id)
-    if member.endswith("iam.gserviceaccount.com"):
+    if member.endswith(".gserviceaccount.com"):
         return "serviceAccount", member
     if entity_type == "userByEmail":
         return "user", member

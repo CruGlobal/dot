@@ -35,6 +35,10 @@ DEFAULT_DESTINATION = "cru-data-warehouse-elt-prod.el_gcp_iam"
 # beta-prod) that never carry grants of their own, so reading them only spends IAM quota.
 SKIPPED_TABLE_DATASETS = frozenset({"dbt_test__audit"})
 
+# dbt builds create and drop these within minutes, often during a run; they carry no grants of their
+# own, and reading them would count every drop against GONE_LIMIT_PER_LEVEL.
+SKIPPED_TABLE_SUFFIXES = ("__dbt_tmp", "__dbt_backup")
+
 RETRYABLE_REASONS = frozenset(
     {"rateLimitExceeded", "quotaExceeded", "backendError", "internalError", "badGateway"}
 )
@@ -53,8 +57,9 @@ RETRYABLE_TYPES = (
 RETRY_TIMEOUT_SECONDS = 600
 FAILURES_LOGGED_PER_LEVEL = 50
 
-# A few tables (dbt's temporary ones) can be dropped while a run reads them. More than this means
-# something removed objects wholesale, and writing the snapshot would end every binding on them.
+# A few tables can still be dropped while a run reads them (dbt's temporary and backup tables are
+# not read at all). More than this means something removed objects wholesale, and writing the
+# snapshot would end every binding on them.
 GONE_LIMIT_PER_LEVEL = 25
 
 # Version 3 returns a conditional grant under its plain role, as the gcloud-based export always
@@ -70,6 +75,8 @@ def is_transient(exc: Exception) -> bool:
     `quotaExceeded` is included because the table level makes one IAM call per table and shares
     the per-minute IAM policy quota with the Security Macros sweeps.
     """
+    if isinstance(exc, requests.exceptions.SSLError):
+        return False
     if isinstance(exc, RETRYABLE_TYPES):
         return True
     errors = getattr(exc, "errors", None) or []
@@ -153,7 +160,7 @@ def collect_dataset(
     tables: LevelResult,
 ) -> None:
     dataset_ref = f"{project}.{dataset_id}"
-    dataset = attempt(
+    dataset = None if datasets.failures else attempt(
         f"dataset {dataset_ref}",
         lambda: bq.get_dataset(dataset_ref, retry=RETRY),
         [datasets],
@@ -165,15 +172,21 @@ def collect_dataset(
         datasets.read += 1
         datasets.rows += members.dataset_rows(project, dataset_id, dataset.access_entries)
 
-    if dataset_id in SKIPPED_TABLE_DATASETS:
+    if dataset_id in SKIPPED_TABLE_DATASETS or tables.failures:
         return
     table_ids = attempt(
         f"tables in {dataset_ref}",
-        lambda: [item.table_id for item in bq.list_tables(dataset_ref, retry=RETRY)],
+        lambda: [
+            item.table_id
+            for item in bq.list_tables(dataset_ref, retry=RETRY)
+            if not item.table_id.endswith(SKIPPED_TABLE_SUFFIXES)
+        ],
         [tables],
         may_vanish=True,
     )
     for table_id in table_ids or []:
+        if tables.failures:
+            return
         table_ref = f"{dataset_ref}.{table_id}"
         policy = attempt(
             f"table {table_ref}",
@@ -195,13 +208,17 @@ def collect(
     projects_api: resourcemanager_v3.ProjectsClient,
     bq: bigquery.Client,
 ) -> dict[Level, LevelResult]:
-    """Reads every level in one pass, listing each project's datasets once."""
+    """Reads every level in one pass, listing each project's datasets once.
+
+    A level stops reading at its first failure, since it will not be written; this keeps an outage
+    from spending the retry budget, and the IAM quota, on every remaining object.
+    """
     results = {level: LevelResult() for level in LEVELS}
     projects, datasets, tables = (results[level] for level in LEVELS)
 
     for project in project_ids:
         logger.info(f"Reading {project}")
-        policy = attempt(
+        policy = None if projects.failures else attempt(
             f"project {project}",
             lambda: projects_api.get_iam_policy(
                 request={
@@ -221,7 +238,7 @@ def collect(
                 members.project_role,
             )
 
-        dataset_ids = attempt(
+        dataset_ids = None if datasets.failures and tables.failures else attempt(
             f"datasets in {project}",
             lambda: [item.dataset_id for item in bq.list_datasets(project, retry=RETRY)],
             [datasets, tables],
@@ -266,7 +283,10 @@ def run(
     for level in LEVELS:
         result = results[level]
         if not result.failures and not result.rows:
-            result.failures.append("no bindings were read")
+            result.failures.append(
+                "no bindings were read; an empty level adds no snapshot, so dse-dbt would keep the "
+                "previous one as newest and show its bindings as still active"
+            )
         if len(result.gone) > GONE_LIMIT_PER_LEVEL:
             result.failures.append(f"{len(result.gone)} objects disappeared during the run")
         summary = {
