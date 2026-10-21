@@ -13,6 +13,12 @@ def mock_env_vars(monkeypatch):
     monkeypatch.setenv("DBT_TOKEN", "test_dbt_token")
 
 
+@pytest.fixture(autouse=True)
+def clear_dbt_base_url(monkeypatch):
+    """Tests expect the default dbt host unless they set DBT_BASE_URL themselves."""
+    monkeypatch.delenv("DBT_BASE_URL", raising=False)
+
+
 @pytest.fixture
 def mock_request_with_job_id():
     mock_req = mock.Mock(spec=Request)
@@ -63,7 +69,7 @@ def test_trigger_dbt_job_success(mock_env_vars, mock_request_with_job_id, caplog
     """
     responses.add(
         responses.POST,
-        "https://cloud.getdbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        "https://kw745.us1.dbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
         json={"data": {"id": "test_run_id"}},
         status=200,
     )
@@ -105,7 +111,7 @@ def test_trigger_dbt_job_invalid_credentials(
     """
     responses.add(
         responses.POST,
-        "https://cloud.getdbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        "https://kw745.us1.dbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
         status=401,
         json={"message": "Invalid API key"},
     )
@@ -123,7 +129,7 @@ def test_trigger_dbt_job_server_error(mock_env_vars, mock_request_with_job_id, c
     """
     responses.add(
         responses.POST,
-        "https://cloud.getdbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        "https://kw745.us1.dbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
         status=500,
         json={"message": "Internal Server Error"},
     )
@@ -141,7 +147,7 @@ def test_trigger_dbt_job_timeout(mock_env_vars, mock_request_with_job_id, caplog
     """
     responses.add(
         responses.POST,
-        "https://cloud.getdbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        "https://kw745.us1.dbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
         body=requests.exceptions.ConnectTimeout("Connection timed out"),
     )
 
@@ -164,7 +170,7 @@ def test_trigger_dbt_job_with_custom_cause(
     """
     responses.add(
         responses.POST,
-        "https://cloud.getdbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        "https://kw745.us1.dbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
         json={"data": {"id": "retry_run_id"}},
         status=200,
     )
@@ -186,7 +192,7 @@ def test_trigger_dbt_job_default_cause(mock_env_vars, mock_request_with_job_id, 
     """
     responses.add(
         responses.POST,
-        "https://cloud.getdbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        "https://kw745.us1.dbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
         json={"data": {"id": "default_run_id"}},
         status=200,
     )
@@ -199,3 +205,24 @@ def test_trigger_dbt_job_default_cause(mock_env_vars, mock_request_with_job_id, 
     # Verify the default cause was used (URL-encoded form data)
     request_body = responses.calls[0].request.body
     assert "Triggered" in request_body and "Google+Cloud+Function" in request_body
+
+
+@responses.activate
+def test_trigger_dbt_job_uses_dbt_base_url_override(
+    mock_env_vars, mock_request_with_job_id, monkeypatch
+):
+    """
+    Tests DBT_BASE_URL overrides the default dbt Cloud host (trailing slash stripped).
+    """
+    monkeypatch.setenv("DBT_BASE_URL", "https://example.dbt.test/api/v2/")
+    responses.add(
+        responses.POST,
+        "https://example.dbt.test/api/v2/accounts/10206/jobs/test_job_id/run/",
+        json={"data": {"id": "override_run_id"}},
+        status=200,
+    )
+
+    response = main.trigger_dbt_job(mock_request_with_job_id)
+
+    assert response[1] == 200
+    assert len(responses.calls) == 1

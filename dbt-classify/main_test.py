@@ -4,6 +4,7 @@ from unittest import mock
 import pytest
 
 import classifier
+import dbt_client
 import main
 
 
@@ -224,3 +225,15 @@ def test_handler_empty_account_id_falls_back_to_default(monkeypatch):
     resp = main.classify_run(FakeRequest(json_body={"run_id": "492", "account_id": ""}))
     assert resp[1] == 200
     assert captured["account_id"] == main.DEFAULT_ACCOUNT_ID
+
+
+def test_read_client_defaults_to_account_host(monkeypatch):
+    monkeypatch.delenv("DBT_BASE_URL", raising=False)
+    client = dbt_client.DbtReadClient(access_token="t", account_id="10206")
+    assert client.account_url == "https://kw745.us1.dbt.com/api/v2/accounts/10206"
+
+
+def test_read_client_uses_dbt_base_url_override(monkeypatch):
+    monkeypatch.setenv("DBT_BASE_URL", "https://example.dbt.test/api/v2/")
+    client = dbt_client.DbtReadClient(access_token="t", account_id="10206")
+    assert client.account_url == "https://example.dbt.test/api/v2/accounts/10206"

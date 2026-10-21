@@ -1,9 +1,18 @@
 import logging
+import os
 import requests
 
 logger = logging.getLogger("primary_logger")
 
-DBT_API_BASE = "https://cloud.getdbt.com/api/v2"
+# Our account-specific dbt Cloud host (cloud.getdbt.com is retired). Set DBT_BASE_URL to
+# override; the shared python package and dse-portal read the same variable.
+DEFAULT_DBT_BASE_URL = "https://kw745.us1.dbt.com/api/v2"
+
+
+def dbt_api_base() -> str:
+    """The dbt Cloud API v2 base URL, without a trailing slash."""
+    return (os.environ.get("DBT_BASE_URL") or DEFAULT_DBT_BASE_URL).rstrip("/")
+
 
 # (connect, read) timeouts in seconds. The failures this client classifies (rate
 # limits, 5xx, infra) are exactly when dbt Cloud may hang a socket, so fail fast on a
@@ -22,7 +31,7 @@ class DbtReadClient:
         # dbt Cloud service tokens authenticate as "Token <key>" (POC-validated for
         # these read endpoints).
         self.headers = {"Authorization": f"Token {access_token}"}
-        self.account_url = f"{DBT_API_BASE}/accounts/{account_id}"
+        self.account_url = f"{dbt_api_base()}/accounts/{account_id}"
 
     def get_run(self, run_id: str) -> dict:
         """GET the run including its trigger (for the loop-guard cause) and run_steps.

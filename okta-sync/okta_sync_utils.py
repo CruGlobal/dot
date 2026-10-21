@@ -12,6 +12,15 @@ from google.cloud import bigquery
 from google.cloud.bigquery import SchemaField
 from google.cloud import storage
 
+# Our account-specific dbt Cloud host (cloud.getdbt.com is retired). Set DBT_BASE_URL to
+# override; the shared python package and dse-portal read the same variable.
+DEFAULT_DBT_BASE_URL = "https://kw745.us1.dbt.com/api/v2"
+
+
+def dbt_api_base() -> str:
+    """The dbt Cloud API v2 base URL, without a trailing slash."""
+    return (os.environ.get("DBT_BASE_URL") or DEFAULT_DBT_BASE_URL).rstrip("/")
+
 
 def get_general_credentials(secret_name: str) -> Union[str, None]:
     """
@@ -459,7 +468,7 @@ def get_dbt_job_list(account_id: str, secret_name: str) -> None:
         "Authorization": f"Token {token}",
         "Content-Type": "application/json",
     }
-    url = f"https://cloud.getdbt.com/api/v2/accounts/{account_id}/jobs/"
+    url = f"{dbt_api_base()}/accounts/{account_id}/jobs/"
     try:
         r = requests.get(url, headers=headers)
         r.raise_for_status()
@@ -491,7 +500,7 @@ def trigger_dbt_job(account_id: str, job_id: str, token: str) -> Union[str, None
         "Authorization": f"Token {token}",
         "Content-Type": "application/json",
     }
-    url = f"https://cloud.getdbt.com/api/v2/accounts/{account_id}/jobs/{job_id}/run/"
+    url = f"{dbt_api_base()}/accounts/{account_id}/jobs/{job_id}/run/"
     json = {"cause": "Triggered by python script API request"}
     try:
         r = requests.post(url, headers=headers, json=json)
@@ -527,7 +536,7 @@ def get_dbt_run_status(run_id: str, token: str) -> int:
         "Authorization": f"Token {token}",
         "Content-Type": "application/json",
     }
-    url = f"https://cloud.getdbt.com/api/v2/accounts/10206/runs/{run_id}/"
+    url = f"{dbt_api_base()}/accounts/10206/runs/{run_id}/"
     try:
         r = requests.get(url, headers=headers)
         r.raise_for_status()
