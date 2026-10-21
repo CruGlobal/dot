@@ -1,4 +1,5 @@
 import pytest
+import requests
 import pandas as pd
 from unittest.mock import Mock, patch, MagicMock
 from main import (
@@ -74,15 +75,16 @@ def test_match_schema():
     assert 'extra_column' not in result.columns
 
 
+@patch('main.dedupe_table_bigquery')
 @patch('main.get_general_credentials')
 @patch('main.get_request')
 @patch('main.get_schema')
 @patch('main.upload_dataframe_to_bigquery')
 @patch('main.write_to_csv')
-def test_sync_data_success(mock_csv, mock_upload, mock_schema, mock_request, mock_creds):
-    """Test successful data sync"""
-    # Mock the API response
-    mock_response = Mock()
+def test_sync_data_success(mock_csv, mock_upload, mock_schema, mock_request, mock_creds, mock_dedupe):
+    """Test successful data sync (batch processing, the default)"""
+    # Mock the API response. get_data_batch only reads a requests.Response.
+    mock_response = Mock(spec=requests.Response)
     mock_response.json.return_value = [{"id": "1", "name": "Test App"}]
     mock_response.links = {}
     mock_request.return_value = mock_response
@@ -98,16 +100,19 @@ def test_sync_data_success(mock_csv, mock_upload, mock_schema, mock_request, moc
     mock_creds.assert_called_with("OKTA_TOKEN")
     mock_schema.assert_called_with("okta_apps")
     mock_upload.assert_called_once()
+    assert mock_upload.call_args.kwargs["write_disposition"] == "WRITE_TRUNCATE"
     mock_csv.assert_called_once()
+    mock_dedupe.assert_called_once_with(
+        "cru-data-warehouse-elt-prod", "temp_okta", "okta_apps", "CRU_DATA_WAREHOUSE_ELT_PROD"
+    )
 
 
 @patch('main.setup_logging')
 @patch('main.sync_data')
 @patch('main.sync_all_users')
 @patch('main.replace_dataset_bigquery')
-@patch('main.dbt_run')
-@patch('main.upload_log')
-def test_trigger_sync_success(mock_upload_log, mock_dbt, mock_replace, mock_sync_users, mock_sync_data, mock_setup_logging):
+@patch('main.publish_pubsub_message')
+def test_trigger_sync_success(mock_publish, mock_replace, mock_sync_users, mock_sync_data, mock_setup_logging):
     """Test successful trigger_sync execution"""
     
     trigger_sync()
@@ -116,8 +121,8 @@ def test_trigger_sync_success(mock_upload_log, mock_dbt, mock_replace, mock_sync
     assert mock_sync_data.call_count == 3  # apps, users, groups
     assert mock_sync_users.call_count == 2  # group_members, app_users
     mock_replace.assert_called_once()
-    mock_dbt.assert_called_once_with("10206", "85521", "DBT_TOKEN")
-    mock_upload_log.assert_called_once()
+    # The dbt job is triggered through a Pub/Sub message, not a direct dbt call
+    mock_publish.assert_called_once_with({"job_id": "85521"}, "cloud-run-job-completed")
 
 
 @patch('main.setup_logging')

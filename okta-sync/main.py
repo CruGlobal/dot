@@ -573,6 +573,8 @@ def match_schema(df: pd.DataFrame, schema_json: Dict[Any, Any]) -> pd.DataFrame:
             # Add missing column with empty values
             if field["type"] == "TIMESTAMP":
                 df[field["name"]] = pd.to_datetime(pd.Series([] * len(df)))
+            elif field["type"] == "INTEGER":
+                df[field["name"]] = pd.Series([] * len(df), dtype="Int64")
             else:
                 df[field["name"]] = pd.Series([] * len(df), dtype=field["type"].lower())
     df = df.astype(dtypes)

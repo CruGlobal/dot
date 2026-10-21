@@ -110,15 +110,15 @@ def test_trigger_dbt_job_invalid_credentials(
         json={"message": "Invalid API key"},
     )
 
-    try:
-        main.trigger_dbt_job(mock_request_with_job_id)
-        pytest.fail("Expected function to raise an exception")
-    except Exception as e:
-        log_messages = [record.message for record in caplog.records]
-        error_message = "An error occurred when attempting to trigger dbt job"
-        assert any(
-            error_message in msg for msg in log_messages
-        ), f"Expected error message not found in logs: {log_messages}"
+    # DbtClient returns None on a non-2xx reply, and main answers 500.
+    response = main.trigger_dbt_job(mock_request_with_job_id)
+
+    assert response == ("Failed to trigger dbt job", 500)
+    log_messages = [record.message for record in caplog.records]
+    error_message = "No response received from the dbt job trigger endpoint."
+    assert any(
+        error_message in msg for msg in log_messages
+    ), f"Expected error message not found in logs: {log_messages}"
 
 
 @responses.activate
@@ -133,15 +133,15 @@ def test_trigger_dbt_job_server_error(mock_env_vars, mock_request_with_job_id, c
         json={"message": "Internal Server Error"},
     )
 
-    try:
-        main.trigger_dbt_job(mock_request_with_job_id)
-        pytest.fail("Expected function to raise an exception")
-    except Exception as e:
-        log_messages = [record.message for record in caplog.records]
-        error_message = "An error occurred when attempting to trigger dbt job"
-        assert any(
-            error_message in msg for msg in log_messages
-        ), f"Expected error message not found in logs: {log_messages}"
+    # DbtClient returns None on a non-2xx reply, and main answers 500.
+    response = main.trigger_dbt_job(mock_request_with_job_id)
+
+    assert response == ("Failed to trigger dbt job", 500)
+    log_messages = [record.message for record in caplog.records]
+    error_message = "No response received from the dbt job trigger endpoint."
+    assert any(
+        error_message in msg for msg in log_messages
+    ), f"Expected error message not found in logs: {log_messages}"
 
 
 @responses.activate
