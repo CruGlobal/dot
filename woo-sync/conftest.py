@@ -6,8 +6,13 @@ google.auth.default() at import time and needs GCP credentials. Patch it before
 main.py is imported so tests run locally / in CI without credentials (mirrors the
 dbt-webhook conftest pattern).
 """
+import os
 import sys
 from unittest import mock
+
+# Repo root on sys.path so `dot_shared` imports resolve (the image gets this
+# from PYTHONPATH=/app).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from google.auth.credentials import AnonymousCredentials
 
