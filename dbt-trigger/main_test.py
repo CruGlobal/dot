@@ -13,6 +13,12 @@ def mock_env_vars(monkeypatch):
     monkeypatch.setenv("DBT_TOKEN", "test_dbt_token")
 
 
+@pytest.fixture(autouse=True)
+def clear_dbt_base_url(monkeypatch):
+    """Tests expect the default dbt host unless they set DBT_BASE_URL themselves."""
+    monkeypatch.delenv("DBT_BASE_URL", raising=False)
+
+
 @pytest.fixture
 def mock_request_with_job_id():
     mock_req = mock.Mock(spec=Request)
@@ -63,7 +69,7 @@ def test_trigger_dbt_job_success(mock_env_vars, mock_request_with_job_id, caplog
     """
     responses.add(
         responses.POST,
-        "https://cloud.getdbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        "https://kw745.us1.dbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
         json={"data": {"id": "test_run_id"}},
         status=200,
     )
@@ -105,20 +111,15 @@ def test_trigger_dbt_job_invalid_credentials(
     """
     responses.add(
         responses.POST,
-        "https://cloud.getdbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        "https://kw745.us1.dbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
         status=401,
         json={"message": "Invalid API key"},
     )
 
-    try:
-        main.trigger_dbt_job(mock_request_with_job_id)
-        pytest.fail("Expected function to raise an exception")
-    except Exception as e:
-        log_messages = [record.message for record in caplog.records]
-        error_message = "An error occurred when attempting to trigger dbt job"
-        assert any(
-            error_message in msg for msg in log_messages
-        ), f"Expected error message not found in logs: {log_messages}"
+    # DbtClient returns None on a non-2xx reply, and main answers 500.
+    response = main.trigger_dbt_job(mock_request_with_job_id)
+
+    assert response == ("Failed to trigger dbt job", 500)
 
 
 @responses.activate
@@ -128,20 +129,15 @@ def test_trigger_dbt_job_server_error(mock_env_vars, mock_request_with_job_id, c
     """
     responses.add(
         responses.POST,
-        "https://cloud.getdbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        "https://kw745.us1.dbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
         status=500,
         json={"message": "Internal Server Error"},
     )
 
-    try:
-        main.trigger_dbt_job(mock_request_with_job_id)
-        pytest.fail("Expected function to raise an exception")
-    except Exception as e:
-        log_messages = [record.message for record in caplog.records]
-        error_message = "An error occurred when attempting to trigger dbt job"
-        assert any(
-            error_message in msg for msg in log_messages
-        ), f"Expected error message not found in logs: {log_messages}"
+    # DbtClient returns None on a non-2xx reply, and main answers 500.
+    response = main.trigger_dbt_job(mock_request_with_job_id)
+
+    assert response == ("Failed to trigger dbt job", 500)
 
 
 @responses.activate
@@ -151,7 +147,7 @@ def test_trigger_dbt_job_timeout(mock_env_vars, mock_request_with_job_id, caplog
     """
     responses.add(
         responses.POST,
-        "https://cloud.getdbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        "https://kw745.us1.dbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
         body=requests.exceptions.ConnectTimeout("Connection timed out"),
     )
 
@@ -174,7 +170,7 @@ def test_trigger_dbt_job_with_custom_cause(
     """
     responses.add(
         responses.POST,
-        "https://cloud.getdbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        "https://kw745.us1.dbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
         json={"data": {"id": "retry_run_id"}},
         status=200,
     )
@@ -196,7 +192,7 @@ def test_trigger_dbt_job_default_cause(mock_env_vars, mock_request_with_job_id, 
     """
     responses.add(
         responses.POST,
-        "https://cloud.getdbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        "https://kw745.us1.dbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
         json={"data": {"id": "default_run_id"}},
         status=200,
     )
@@ -209,3 +205,66 @@ def test_trigger_dbt_job_default_cause(mock_env_vars, mock_request_with_job_id, 
     # Verify the default cause was used (URL-encoded form data)
     request_body = responses.calls[0].request.body
     assert "Triggered" in request_body and "Google+Cloud+Function" in request_body
+
+
+@responses.activate
+def test_trigger_dbt_job_uses_dbt_base_url_override(
+    mock_env_vars, mock_request_with_job_id, monkeypatch
+):
+    """
+    Tests DBT_BASE_URL overrides the default dbt Cloud host; a bare host gets /api/v2.
+    """
+    monkeypatch.setenv("DBT_BASE_URL", "https://example.dbt.test/")
+    responses.add(
+        responses.POST,
+        "https://example.dbt.test/api/v2/accounts/10206/jobs/test_job_id/run/",
+        json={"data": {"id": "override_run_id"}},
+        status=200,
+    )
+
+    response = main.trigger_dbt_job(mock_request_with_job_id)
+
+    assert response[1] == 200
+    assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_trigger_dbt_job_accepts_api_v2_dbt_base_url(
+    mock_env_vars, mock_request_with_job_id, monkeypatch
+):
+    """
+    Tests a DBT_BASE_URL that already ends in /api/v2 (the cru-terraform form) is used as is.
+    """
+    monkeypatch.setenv("DBT_BASE_URL", "https://example.dbt.test/api/v2/")
+    responses.add(
+        responses.POST,
+        "https://example.dbt.test/api/v2/accounts/10206/jobs/test_job_id/run/",
+        json={"data": {"id": "api_v2_run_id"}},
+        status=200,
+    )
+
+    response = main.trigger_dbt_job(mock_request_with_job_id)
+
+    assert response[1] == 200
+    assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_trigger_dbt_job_empty_dbt_base_url_uses_default(
+    mock_env_vars, mock_request_with_job_id, monkeypatch
+):
+    """
+    Tests an empty DBT_BASE_URL falls back to the default dbt Cloud host.
+    """
+    monkeypatch.setenv("DBT_BASE_URL", "")
+    responses.add(
+        responses.POST,
+        "https://kw745.us1.dbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        json={"data": {"id": "default_run_id"}},
+        status=200,
+    )
+
+    response = main.trigger_dbt_job(mock_request_with_job_id)
+
+    assert response[1] == 200
+    assert len(responses.calls) == 1
