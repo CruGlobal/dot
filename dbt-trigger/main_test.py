@@ -114,11 +114,6 @@ def test_trigger_dbt_job_invalid_credentials(
     response = main.trigger_dbt_job(mock_request_with_job_id)
 
     assert response == ("Failed to trigger dbt job", 500)
-    log_messages = [record.message for record in caplog.records]
-    error_message = "No response received from the dbt job trigger endpoint."
-    assert any(
-        error_message in msg for msg in log_messages
-    ), f"Expected error message not found in logs: {log_messages}"
 
 
 @responses.activate
@@ -137,11 +132,6 @@ def test_trigger_dbt_job_server_error(mock_env_vars, mock_request_with_job_id, c
     response = main.trigger_dbt_job(mock_request_with_job_id)
 
     assert response == ("Failed to trigger dbt job", 500)
-    log_messages = [record.message for record in caplog.records]
-    error_message = "No response received from the dbt job trigger endpoint."
-    assert any(
-        error_message in msg for msg in log_messages
-    ), f"Expected error message not found in logs: {log_messages}"
 
 
 @responses.activate

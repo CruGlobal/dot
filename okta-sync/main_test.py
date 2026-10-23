@@ -74,6 +74,9 @@ def test_match_schema():
     # Should not contain extra_column
     assert 'extra_column' not in result.columns
 
+    # A missing INTEGER column is a nullable Int64, as BigQuery loads it
+    assert result['age'].dtype == 'Int64'
+
 
 @patch('main.dedupe_table_bigquery')
 @patch('main.get_general_credentials')
