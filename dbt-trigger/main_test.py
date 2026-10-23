@@ -247,3 +247,24 @@ def test_trigger_dbt_job_accepts_bare_dbt_host(
 
     assert response[1] == 200
     assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_trigger_dbt_job_empty_dbt_base_url_uses_default(
+    mock_env_vars, mock_request_with_job_id, monkeypatch
+):
+    """
+    Tests an empty DBT_BASE_URL falls back to the default dbt Cloud host.
+    """
+    monkeypatch.setenv("DBT_BASE_URL", "")
+    responses.add(
+        responses.POST,
+        "https://kw745.us1.dbt.com/api/v2/accounts/10206/jobs/test_job_id/run/",
+        json={"data": {"id": "default_run_id"}},
+        status=200,
+    )
+
+    response = main.trigger_dbt_job(mock_request_with_job_id)
+
+    assert response[1] == 200
+    assert len(responses.calls) == 1
