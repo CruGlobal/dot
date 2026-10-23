@@ -226,3 +226,24 @@ def test_trigger_dbt_job_uses_dbt_base_url_override(
 
     assert response[1] == 200
     assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_trigger_dbt_job_accepts_bare_dbt_host(
+    mock_env_vars, mock_request_with_job_id, monkeypatch
+):
+    """
+    Tests a bare-host DBT_BASE_URL (the dse-dbt-jobs-as-code form) gets /api/v2 added.
+    """
+    monkeypatch.setenv("DBT_BASE_URL", "https://example.dbt.test")
+    responses.add(
+        responses.POST,
+        "https://example.dbt.test/api/v2/accounts/10206/jobs/test_job_id/run/",
+        json={"data": {"id": "bare_host_run_id"}},
+        status=200,
+    )
+
+    response = main.trigger_dbt_job(mock_request_with_job_id)
+
+    assert response[1] == 200
+    assert len(responses.calls) == 1

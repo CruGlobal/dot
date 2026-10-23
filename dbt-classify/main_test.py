@@ -237,3 +237,9 @@ def test_read_client_uses_dbt_base_url_override(monkeypatch):
     monkeypatch.setenv("DBT_BASE_URL", "https://example.dbt.test/api/v2/")
     client = dbt_client.DbtReadClient(access_token="t", account_id="10206")
     assert client.account_url == "https://example.dbt.test/api/v2/accounts/10206"
+
+
+def test_read_client_accepts_bare_dbt_host(monkeypatch):
+    monkeypatch.setenv("DBT_BASE_URL", "https://example.dbt.test")
+    client = dbt_client.DbtReadClient(access_token="t", account_id="10206")
+    assert client.account_url == "https://example.dbt.test/api/v2/accounts/10206"

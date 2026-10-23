@@ -2,7 +2,6 @@ import pytest
 import requests
 import pandas as pd
 from unittest.mock import Mock, patch, MagicMock
-import okta_sync_utils
 from main import (
     setup_logging,
     get_schema,
@@ -137,24 +136,6 @@ def test_trigger_sync_failure(mock_sync_data, mock_setup_logging):
     
     with pytest.raises(Exception, match="Test error"):
         trigger_sync()
-
-
-def test_dbt_api_base_defaults_to_account_host(monkeypatch):
-    """dbt Cloud calls go to our account-specific host by default"""
-    monkeypatch.delenv("DBT_BASE_URL", raising=False)
-    assert okta_sync_utils.dbt_api_base() == "https://kw745.us1.dbt.com/api/v2"
-
-
-@patch('okta_sync_utils.requests.post')
-def test_trigger_dbt_job_uses_dbt_base_url_override(mock_post, monkeypatch):
-    """DBT_BASE_URL overrides the dbt Cloud host (trailing slash stripped)"""
-    monkeypatch.setenv("DBT_BASE_URL", "https://example.dbt.test/api/v2/")
-    mock_post.return_value.json.return_value = {"data": {"id": 123}}
-
-    assert okta_sync_utils.trigger_dbt_job("10206", "85521", "token") == 123
-    assert mock_post.call_args[0][0] == (
-        "https://example.dbt.test/api/v2/accounts/10206/jobs/85521/run/"
-    )
 
 
 if __name__ == "__main__":

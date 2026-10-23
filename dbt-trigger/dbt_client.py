@@ -5,13 +5,15 @@ import requests
 logger = logging.getLogger("primary_logger")
 
 # Our account-specific dbt Cloud host (cloud.getdbt.com is retired). Set DBT_BASE_URL to
-# override; the shared python package and dse-portal read the same variable.
+# override, as the bare host or with /api/v2: dse-dbt-jobs-as-code uses the bare host,
+# while the shared python package and dse-portal include /api/v2.
 DEFAULT_DBT_BASE_URL = "https://kw745.us1.dbt.com/api/v2"
 
 
 def dbt_api_base() -> str:
     """The dbt Cloud API v2 base URL, without a trailing slash."""
-    return (os.environ.get("DBT_BASE_URL") or DEFAULT_DBT_BASE_URL).rstrip("/")
+    base = (os.environ.get("DBT_BASE_URL") or DEFAULT_DBT_BASE_URL).rstrip("/")
+    return base if base.endswith("/api/v2") else f"{base}/api/v2"
 
 
 class DbtClient:
