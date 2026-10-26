@@ -118,5 +118,6 @@ Key files in cru-terraform:
 - `functions.tf` — Cloud Function definitions, schedules, secrets
 - `workflow.tf` — Cloud Workflow definitions
 - `event-triggers.tf` — Eventarc triggers (Pub/Sub → Workflow)
+- `dbt-job-completed-push.tf`: Pub/Sub push subscriptions that tell outside systems a dbt job succeeded
 - `permissions.tf` — IAM bindings for service accounts
 - `*.yaml` — Workflow YAML files (referenced by `workflow.tf` via `templatefile()`)

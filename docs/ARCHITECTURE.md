@@ -9,7 +9,7 @@ DOT uses an event-driven, push-based architecture. When a long-running job compl
 - **Cloud Functions have execution time limits** — polling for long-running job status keeps the function alive unnecessarily, consuming resources and risking timeouts.
 - **Cloud Workflows handle long-running orchestration** — Workflows can sleep, poll, and branch without the same cost/timeout constraints as Cloud Functions.
 - **Pub/Sub + Eventarc decouples producers from consumers** — the webhook function returns immediately after publishing a message; it doesn't need to know what happens next.
-- **Consistent infrastructure** — all orchestration uses the same Pub/Sub + Eventarc + Cloud Workflow stack. No mixing in Cloud Tasks, Cloud Scheduler polling, or other async patterns.
+- **Consistent infrastructure** — all orchestration uses the same Pub/Sub + Eventarc + Cloud Workflow stack. No mixing in Cloud Tasks, Cloud Scheduler polling, or other async patterns. The one exception is a plain hand-off to an outside system: a Pub/Sub push subscription on `dbt-job-completed` delivers straight to the consumer, because there is nothing to orchestrate (see "dbt → outside HTTPS endpoint" below).
 
 ### The Standard Flow
 
@@ -140,6 +140,30 @@ Pub/Sub topic: hightouch-completed
 
 **Note:** The dbt-webhook CF publishes ALL successful completions to `dbt-job-completed`. The hightouch-workflow looks the job_id up in its `dbt_job_to_hightouch` config map (a `local` in `cru-terraform/.../dot/prod/workflow.tf`, injected via `jsonencode`) and exits for jobs not in the map. **Adding a new "dbt job → Hightouch → webhook" chain is a config change, not workflow code:** add one map entry (`{ chain, sequence_id, webhook_secret_name }`) — reusing an existing webhook secret needs nothing more; a new webhook target also needs its Secret Manager secret + an accessor grant for the webhook-notify SA. The `webhook-notify-workflow` calls whatever secret the payload's `webhook_secret_name` names, so it is generic across chains (not MPDX-specific). Logs and the completion payload carry a `chain` label (the pipeline name), which replaced the earlier `environment` field — ambiguous once a chain's dbt environment (e.g. beta-prod) differed from its downstream target (stage).
 
+### dbt → outside HTTPS endpoint (Pub/Sub push, no workflow)
+
+Use this when an outside system only needs to know that a dbt job succeeded. When something has to run between the build and the call, like the Hightouch sync above, use a workflow: it starts that step, waits for it to finish, and then notifies.
+
+```
+dbt Cloud job completes successfully
+  → dbt-webhook publishes to Pub/Sub topic: dbt-job-completed (as above)
+
+Pub/Sub topic: dbt-job-completed
+  → push subscription dbt-job-completed-push-<consumer>, filtered on the job_id attribute
+    → POST the message body as plain JSON, with a Google OIDC token
+      (service account dbt-job-completed-push, audience = the consumer's own string)
+    → on anything but a success code, Pub/Sub retries with backoff (10s → 600s) for up to 7 days
+```
+
+Adding a consumer is one entry in `dbt_job_completed_push_consumers` (`cru-terraform/.../dot/prod/dbt-job-completed-push.tf`): `dbt_job_ids`, `push_endpoint`, `audience` and `alert_after_hours`. It needs no workflow, topic or code change. The consumer's endpoint must:
+
+- check the token's signature, its `email` (`dbt-job-completed-push@cru-data-orchestration-prod.iam.gserviceaccount.com`) and its `aud` (the consumer's own audience);
+- answer 102, 200, 201, 202 or 204 within 60 seconds to every push, including pushes it decides to skip, and do slow work after answering. Any other answer is a failure, and Pub/Sub sends the message again;
+- expect repeats and out-of-order delivery: keep the highest `run_id` handled and skip anything not newer;
+- hold no secret in its URL, which shows in Terraform plans and Datadog alerts.
+
+Changing a consumer's `dbt_job_ids` recreates its subscription and loses any messages still waiting. Each consumer has two Datadog monitors that alert `@dps-dse@cru.org`: one when a message has waited more than an hour, and one when no push has succeeded within `alert_after_hours`. To re-drive a consumer, re-run its dbt job. A hand-made test message with a made-up `run_id` can make a consumer skip every real build after it. There is no ready-made path for a consumer that cannot verify a token: `webhook-notify-workflow` only runs on hightouch-workflow's completion message.
+
 ## Anti-Patterns
 
 ### Do NOT use Cloud Tasks for delayed retries
@@ -177,6 +201,8 @@ If you need to wait for a job to complete, use a Cloud Workflow with `sys.sleep`
 See [Testing Guide](TESTING.md) for POC deployment and workflow verification steps.
 
 ## Adding a New Workflow
+
+To tell an outside HTTPS endpoint that a dbt job succeeded, you don't need a workflow. Add a push consumer instead (see "dbt → outside HTTPS endpoint").
 
 1. **Create the Pub/Sub topic** in Terraform (if new)
 2. **Create the workflow YAML** file (see `fabric_job_workflow.yaml` or `dbt_retry_workflow.yaml` as reference)
@@ -347,16 +373,17 @@ A persistent fail-open alerts through the Datadog monitor "DSE dbt trigger gate 
 | Terraform (POC) | `dot/poc-terraform/` |
 | Workflow definitions | `cru-terraform/.../dot/prod/*.yaml` + `workflow.tf` |
 | Eventarc triggers | `cru-terraform/.../dot/prod/event-triggers.tf` |
+| Push subscriptions | `cru-terraform/.../dot/prod/dbt-job-completed-push.tf` |
 | Permissions | `cru-terraform/.../dot/prod/permissions.tf` |
 | Secrets | `cru-terraform/.../dot/prod/secrets.tf` |
 
 ## Pub/Sub Topics
 
-| Topic | Publisher | Consumer Workflow | Purpose |
+| Topic | Publisher | Consumer | Purpose |
 |-------|-----------|-------------------|---------|
 | `cloud-run-job-completed` | okta-sync, woo-sync, process-geography | cloud-run-job-dbt | Trigger dbt job after CloudRun job completes |
 | `fivetran-events` | fivetran-webhook | fivetran-dbt | Trigger dbt job after Fivetran sync completes |
-| `dbt-job-completed` | dbt-webhook (on success) | hightouch-workflow | Generic fan-out for all post-dbt orchestration |
+| `dbt-job-completed` | dbt-webhook (on success) | hightouch-workflow; one push subscription per entry in `dbt_job_completed_push_consumers` | Generic fan-out for all post-dbt orchestration and hand-offs |
 | `fabric-job-events` | dbt-webhook (on success, legacy for job 163545) | fabric-job-workflow | Run the Fabric Notebook (jobType `RunNotebook`) after the US Donations dbt job succeeds |
 | `hightouch-completed` | hightouch-workflow | webhook-notify-workflow | Call the downstream webhook (named by the payload's `webhook_secret_name`) after a Hightouch sync completes |
 | `dbt-retry-events` | dbt-webhook (on failure) | dbt-retry-workflow | Retry transient dbt Cloud job failures |
