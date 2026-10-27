@@ -6,6 +6,7 @@ import functions_framework
 
 from dbt_client import DbtReadClient
 import classifier
+import failure_details
 
 logger = logging.getLogger("primary_logger")
 logger.propagate = False
@@ -71,7 +72,9 @@ def classify_run(request):
 
     Input  (POST JSON): {"run_id": "...", "account_id": "..."}  (account_id optional)
     Output (JSON):      the verdict from classifier.decide() -- reason, is_retryable,
-                        prior_is_retry, counts, failed_nodes, run_created_at.
+                        prior_is_retry, counts, failed_nodes, run_created_at -- plus the
+                        alert fields from failure_details.describe(): run and job links,
+                        job name, trigger cause, failed step, and what failed and why.
 
     The retry workflow calls this so the large run_results.json is parsed here (Python)
     rather than held in a Cloud Workflow variable (which exceeds the Workflows memory
@@ -122,6 +125,20 @@ def classify_run(request):
     verdict = classifier.decide(
         run_data, results, results_fetch_failed=results_fetch_failed
     )
+
+    # The alert fields are extra: a failure here is logged and the verdict goes back
+    # without them, so a details bug can never cost a retry.
+    try:
+        sources = None
+        if failure_details.needs_sources(run_data):
+            try:
+                sources = client.get_run_sources(run_id)
+            except Exception as e:
+                logger.warning(f"Could not fetch sources.json for run {run_id}: {e}")
+        verdict.update(failure_details.describe(run_data, results, sources))
+    except Exception as e:
+        logger.exception(f"Could not build failure details for run {run_id}: {e}")
+
     logger.info(
         f"Classification for run {run_id}: reason={verdict['reason']} "
         f"is_retryable={verdict['is_retryable']} prior_is_retry={verdict['prior_is_retry']}"

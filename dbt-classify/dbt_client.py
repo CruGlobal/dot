@@ -26,7 +26,7 @@ HTTP_TIMEOUT = (10, 60)
 
 class DbtReadClient:
     """Read-only dbt Cloud API client for the classifier: fetch a failed run's
-    metadata (trigger + run steps) and its run_results.json artifact."""
+    metadata (trigger, run steps, job) and its run_results.json / sources.json artifacts."""
 
     def __init__(self, access_token: str, account_id: str):
         self.account_id = account_id
@@ -36,11 +36,12 @@ class DbtReadClient:
         self.account_url = f"{dbt_api_base()}/accounts/{account_id}"
 
     def get_run(self, run_id: str) -> dict:
-        """GET the run including its trigger (for the loop-guard cause) and run_steps.
-        Returns the `data` object; raises on a non-2xx response."""
+        """GET the run including its trigger (for the loop-guard cause), run_steps and
+        job (for the alert's job name). Returns the `data` object; raises on a non-2xx
+        response."""
         resp = requests.get(
             f"{self.account_url}/runs/{run_id}/",
-            params={"include_related": '["trigger","run_steps"]'},
+            params={"include_related": '["trigger","run_steps","job"]'},
             headers=self.headers,
             timeout=HTTP_TIMEOUT,
         )
@@ -52,6 +53,17 @@ class DbtReadClient:
         empty); raises on a non-2xx response (e.g. artifact not produced)."""
         resp = requests.get(
             f"{self.account_url}/runs/{run_id}/artifacts/run_results.json",
+            headers=self.headers,
+            timeout=HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+
+    def get_run_sources(self, run_id: str) -> list:
+        """GET the sources.json artifact a `dbt source freshness` step writes. Returns the
+        results[] list (possibly empty); raises on a non-2xx response."""
+        resp = requests.get(
+            f"{self.account_url}/runs/{run_id}/artifacts/sources.json",
             headers=self.headers,
             timeout=HTTP_TIMEOUT,
         )
