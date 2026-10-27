@@ -1,15 +1,18 @@
-"""What failed in a dbt Cloud run, for the retry workflow's failure alert.
+"""What failed in a dbt Cloud run, for a Slack failure alert.
 
 No I/O lives here, like classifier.py: `describe()` takes the already-fetched run
-metadata and artifacts and returns the fields the workflow puts in its Slack post --
-which models, tests or sources failed and why, the failed step, and links to the run
-and the job. It never changes the retry decision; classifier.decide() owns that.
+metadata and artifacts and returns the fields a failure alert needs -- which models,
+tests or sources failed and why, the failed step, and links to the run and the job.
+It never changes the retry decision; classifier.decide() owns that.
 
 Where the failures are depends on the failed step:
   dbt build / run / test / seed / snapshot / run-operation -> run_results.json
   dbt source freshness                                     -> sources.json
   a command-level error (compile, selector, deps) or a missing artifact
                                                            -> the step's log only
+
+Every text field is Slack-escaped and meant to be posted, not logged: it is dbt and
+BigQuery error output, which can quote a data value.
 """
 
 import re
@@ -23,6 +26,9 @@ MAX_FAILURE_DETAILS = 5
 MESSAGE_CHARS = 400
 
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+# Slack reads & < > as control characters in any text, including code blocks, so raw
+# error text such as "<!DOCTYPE html>" could form a link or an @-mention. "&" goes first.
+SLACK_ESCAPES = (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"))
 # jobs-as-code appends the job's identifier to its name: "WorkVivo [[workvivo_prod]]".
 JOB_IDENTIFIER_SUFFIX = re.compile(r"\s*\[\[[^\]]*\]\]\s*$")
 # dbt Cloud names a command step "Invoke dbt with `<command>`".
@@ -44,25 +50,24 @@ SECONDS_PER_HOUR = 3600
 SECONDS_PER_DAY = 86400
 
 
-def clip(text, limit=MESSAGE_CHARS) -> str:
-    """Strip terminal colour codes and surrounding space, then cut to `limit` characters."""
+def slack_text(text, limit=MESSAGE_CHARS) -> str:
+    """`text` without colour codes or surrounding space, cut to `limit` characters, with
+    Slack's control characters escaped."""
     text = ANSI_ESCAPE.sub("", text or "").strip()
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    for raw, escaped in SLACK_ESCAPES:
+        text = text.replace(raw, escaped)
+    return text
 
 
 def node_name(unique_id: str) -> str:
     """The readable part of a unique_id: "model.proj.orders.v1" -> "orders.v1",
     "test.proj.not_null_orders_id.ab12cd34ef" -> "not_null_orders_id"."""
-    parts = (unique_id or "").split(".")[2:]
+    parts = unique_id.split(".")[2:]
     if unique_id.startswith("test.") and len(parts) > 1 and TEST_HASH_SUFFIX.match(parts[-1]):
         parts = parts[:-1]
-    return ".".join(parts) or unique_id or ""
-
-
-def failed_step(run_data: dict):
-    """The first run step that errored, or None."""
-    steps = run_data.get("run_steps") or []
-    return next((s for s in steps if s.get("status") == STEP_STATUS_ERROR), None)
+    return ".".join(parts) or unique_id
 
 
 def step_command(step) -> str:
@@ -72,10 +77,18 @@ def step_command(step) -> str:
     return match.group("command") if match else name
 
 
+def failed_step(run_data: dict):
+    """The step that failed the run, or None. A job's "Run source freshness" option runs
+    freshness first and carries on when it errors, so an errored freshness step counts
+    only when no other step errored."""
+    errored = [s for s in run_data.get("run_steps") or [] if s.get("status") == STEP_STATUS_ERROR]
+    blocking = [s for s in errored if FRESHNESS_COMMAND not in step_command(s)]
+    return (blocking or errored or [None])[0]
+
+
 def needs_sources(run_data) -> bool:
-    """True when the failed step is `dbt source freshness`, whose failures are in
-    sources.json. A freshness step that did not fail is skipped on purpose: a job can
-    run freshness without failing on it, and those stale sources are not why it failed."""
+    """True when the step that failed the run is `dbt source freshness`, whose failures
+    are in sources.json."""
     return FRESHNESS_COMMAND in step_command(failed_step(run_data or {}))
 
 
@@ -106,9 +119,9 @@ def _detail(unique_id, status, message) -> dict:
     unique_id = unique_id or ""
     return {
         "resource_type": unique_id.split(".", 1)[0],
-        "name": node_name(unique_id),
+        "name": slack_text(node_name(unique_id)),
         "status": status,
-        "message": clip(message),
+        "message": slack_text(message),
     }
 
 
@@ -146,7 +159,7 @@ def log_error_summary(logs) -> str:
     if ends:
         text = text[: min(ends)]
     lines = (line.rstrip() for line in LOG_TIMESTAMP.sub("", text).splitlines())
-    return clip("\n".join(line for line in lines if line.strip()))
+    return slack_text("\n".join(line for line in lines if line.strip()))
 
 
 def job_href(run_data: dict) -> str:
@@ -158,16 +171,16 @@ def job_href(run_data: dict) -> str:
     return href if replaced else ""
 
 
-def describe(run_data, results=None, sources=None) -> dict:
+def describe(run_data, results=None, sources=None, job_name="") -> dict:
     """The alert fields for a failed run.
 
     Args:
-        run_data: parsed `/runs/{id}/?include_related=["trigger","run_steps","job"]` data,
-                  or None if that fetch failed (every field is then empty, and the
-                  workflow falls back to the ids in its own message).
+        run_data: the run from DbtReadClient.get_run(), or None if that fetch failed
+                  (every field but job_name is then empty).
         results: the run_results.json results[] list, or None.
         sources: the sources.json results[] list, or None (fetched only when
                  needs_sources() is true).
+        job_name: the job name the caller already has (dbt's webhook sends it).
 
     Errors (a model, seed or source that did not build or is stale) are listed before
     test failures, so a broken build is never hidden behind a list of failing tests.
@@ -180,9 +193,9 @@ def describe(run_data, results=None, sources=None) -> dict:
     return {
         "run_href": run_data.get("href") or "",
         "job_href": job_href(run_data),
-        "job_name": JOB_IDENTIFIER_SUFFIX.sub("", (run_data.get("job") or {}).get("name") or ""),
-        "trigger_cause": (run_data.get("trigger") or {}).get("cause") or "",
-        "failed_step": step_command(step),
+        "job_name": slack_text(JOB_IDENTIFIER_SUFFIX.sub("", job_name or "")),
+        "trigger_cause": slack_text((run_data.get("trigger") or {}).get("cause")),
+        "failed_step": slack_text(step_command(step)),
         "failure_details": details[:MAX_FAILURE_DETAILS],
         "failure_details_omitted": max(len(details) - MAX_FAILURE_DETAILS, 0),
         "failed_step_error": "" if details else log_error_summary((step or {}).get("logs")),

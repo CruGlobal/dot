@@ -70,7 +70,8 @@ def _parse_request(request):
 def classify_run(request):
     """Classify a failed dbt Cloud run as retryable (transient) or not.
 
-    Input  (POST JSON): {"run_id": "...", "account_id": "..."}  (account_id optional)
+    Input  (POST JSON): {"run_id": "...", "account_id": "...", "job_name": "..."}
+                        (account_id and job_name optional)
     Output (JSON):      the verdict from classifier.decide() -- reason, is_retryable,
                         prior_is_retry, counts, failed_nodes, run_created_at -- plus the
                         alert fields from failure_details.describe(): run and job links,
@@ -127,7 +128,8 @@ def classify_run(request):
     )
 
     # The alert fields are extra: a failure here is logged and the verdict goes back
-    # without them, so a details bug can never cost a retry.
+    # without them, and a field can never replace a classifier field, so a details bug
+    # can never cost a retry.
     try:
         sources = None
         if failure_details.needs_sources(run_data):
@@ -135,7 +137,11 @@ def classify_run(request):
                 sources = client.get_run_sources(run_id)
             except Exception as e:
                 logger.warning(f"Could not fetch sources.json for run {run_id}: {e}")
-        verdict.update(failure_details.describe(run_data, results, sources))
+        details = failure_details.describe(
+            run_data, results, sources, job_name=request_json.get("job_name")
+        )
+        for key, value in details.items():
+            verdict.setdefault(key, value)
     except Exception as e:
         logger.exception(f"Could not build failure details for run {run_id}: {e}")
 

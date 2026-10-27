@@ -73,7 +73,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the push-not-poll pattern, 
 
 | Directory | Purpose |
 |-----------|---------|
-| `dbt-classify/` | Classifies a failed dbt Cloud run as transient (retryable) or not, for the dbt-retry-workflow. Reads run metadata + `run_results.json` (kept out of the Cloud Workflow, which can't hold the large artifact in a variable). |
+| `dbt-classify/` | Classifies a failed dbt Cloud run as transient (retryable) or not, for the dbt-retry-workflow. Reads run metadata + `run_results.json` (kept out of the Cloud Workflow, which can't hold the large artifact in a variable). Also returns what failed (run and job links, failed step, up to 5 failures with messages) for a failure alert, reading `sources.json` when a freshness step failed the run. |
 | `dbt-trigger/` | Triggers dbt Cloud jobs via API. Accepts optional `cause` for tracking. |
 | `dbt-webhook/` | Receives dbt Cloud webhooks. Routes success → Fabric, failure → retry. |
 | `fivetran-trigger/` | Triggers Fivetran sync jobs |

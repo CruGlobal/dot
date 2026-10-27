@@ -255,11 +255,10 @@ def test_read_client_empty_dbt_base_url_uses_default(monkeypatch):
 # --------------------------------------------------------------------------
 # failure_details — the alert fields
 # --------------------------------------------------------------------------
-def failed_run(steps=None, job_name="WorkVivo [[workvivo_prod]]"):
+def failed_run(steps=None):
     return {
         "href": "https://dbt.test/deploy/1/projects/2/runs/521187447/",
         "job_definition_id": 1045497,
-        "job": {"name": job_name},
         "trigger": {"cause": "Triggered by completion of run 521184944"},
         "run_steps": steps if steps is not None else [
             {"status": 10, "name": "Invoke dbt with `dbt deps`"},
@@ -306,7 +305,7 @@ FRESHNESS_LOG = (
 
 
 def test_describe_run_and_job_fields():
-    d = failure_details.describe(failed_run(), [])
+    d = failure_details.describe(failed_run(), [], job_name="WorkVivo [[workvivo_prod]]")
     assert d["run_href"] == "https://dbt.test/deploy/1/projects/2/runs/521187447/"
     assert d["job_href"] == "https://dbt.test/deploy/1/projects/2/jobs/1045497/"
     assert d["job_name"] == "WorkVivo"
@@ -339,10 +338,32 @@ def test_describe_caps_the_list_and_counts_the_rest():
     assert d["failure_details_omitted"] == 8 - failure_details.MAX_FAILURE_DETAILS
 
 
-def test_clip_strips_colour_codes_and_cuts_long_messages():
-    assert failure_details.clip("  \x1b[31mboom\x1b[0m \n") == "boom"
-    clipped = failure_details.clip("x" * 1000)
+def test_slack_text_strips_colour_codes_and_cuts_long_messages():
+    assert failure_details.slack_text("  \x1b[31mboom\x1b[0m \n") == "boom"
+    clipped = failure_details.slack_text("x" * 1000)
     assert len(clipped) == failure_details.MESSAGE_CHARS and clipped.endswith("…")
+
+
+def test_slack_text_escapes_what_slack_would_read_as_a_link_or_mention():
+    assert failure_details.slack_text("<!here> & <https://x|reset>") == (
+        "&lt;!here&gt; &amp; &lt;https://x|reset&gt;"
+    )
+
+
+def test_every_text_field_is_escaped():
+    run = dict(failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt run --select <x>`",
+                                  "logs": RUNTIME_ERROR_LOG.replace("manifest", "<!channel>")}]),
+               trigger={"cause": "<!channel>"})
+    d = failure_details.describe(run, [], job_name="<!here>")
+    for field in ("job_name", "trigger_cause", "failed_step", "failed_step_error"):
+        assert "<" not in d[field] and "&lt;" in d[field], field
+    [detail] = failure_details.result_details([result("error", "ARRAY<STRUCT<a INT64>>", "model.proj.m")])
+    assert detail["message"] == "ARRAY&lt;STRUCT&lt;a INT64&gt;&gt;"
+
+
+def test_failed_step_is_clipped():
+    run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt build " + "x" * 5000 + "`"}])
+    assert len(failure_details.describe(run, [])["failed_step"]) == failure_details.MESSAGE_CHARS
 
 
 def test_node_name():
@@ -389,6 +410,18 @@ def test_needs_sources_only_when_the_freshness_step_failed():
     assert failure_details.needs_sources(None) is False
 
 
+def test_a_non_blocking_freshness_step_is_not_the_failed_step():
+    # A job's "Run source freshness" option: freshness errors first, the run carries on,
+    # and a later step is what failed it.
+    steps = [freshness_step(),
+             {"status": 10, "name": "Invoke dbt with `dbt build --selector raw_and_staging`"},
+             {"status": 20, "name": "Invoke dbt with `dbt build --selector unittest`"},
+             {"status": 40, "name": "Invoke dbt with `dbt run --selector release`"}]
+    run = failed_run(steps=steps)
+    assert failure_details.describe(run, [])["failed_step"] == "dbt build --selector unittest"
+    assert failure_details.needs_sources(run) is False
+
+
 def test_failed_step_error_from_a_command_level_error():
     run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt run --selector x`",
                              "logs": RUNTIME_ERROR_LOG}])
@@ -423,9 +456,10 @@ def test_failed_step_error_is_empty_without_a_dbt_error_summary():
     assert failure_details.describe(run, None)["failed_step_error"] == ""
 
 
-def test_describe_without_run_metadata_is_empty():
-    d = failure_details.describe(None, None)
-    assert d["run_href"] == d["job_href"] == d["job_name"] == d["failed_step"] == ""
+def test_describe_without_run_metadata_keeps_only_the_given_job_name():
+    d = failure_details.describe(None, None, job_name="GodTools [[godtools_prod]]")
+    assert d["job_name"] == "GodTools"
+    assert d["run_href"] == d["job_href"] == d["trigger_cause"] == d["failed_step"] == ""
     assert d["failure_details"] == [] and d["failure_details_omitted"] == 0
     assert d["failed_step_error"] == ""
 
@@ -444,7 +478,8 @@ def test_handler_adds_failure_details_to_the_verdict(monkeypatch):
     fake.get_run_results.return_value = [result("fail", "Got 2 results", "test.proj.t")]
     monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
 
-    verdict = json.loads(main.classify_run(FakeRequest(json_body={"run_id": "521187447"}))[0])
+    body = {"run_id": "521187447", "job_name": "WorkVivo [[workvivo_prod]]"}
+    verdict = json.loads(main.classify_run(FakeRequest(json_body=body))[0])
     assert verdict["reason"] == "nontransient"
     assert verdict["job_name"] == "WorkVivo"
     assert verdict["failure_details"][0]["name"] == "t"
@@ -490,3 +525,16 @@ def test_handler_details_failure_never_changes_the_verdict(monkeypatch):
     verdict = json.loads(resp[0])
     assert verdict["reason"] == "transient" and verdict["is_retryable"] is True
     assert "failure_details" not in verdict
+
+
+def test_handler_details_never_replace_a_classifier_field(monkeypatch):
+    fake = mock.Mock()
+    fake.get_run.return_value = run_data(steps=[ERR_STEP])
+    fake.get_run_results.return_value = [result("error", "Resources exceeded")]
+    monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
+    clashing = {"reason": "nontransient", "is_retryable": False, "run_href": "https://x"}
+    monkeypatch.setattr(failure_details, "describe", mock.Mock(return_value=clashing))
+
+    verdict = json.loads(main.classify_run(FakeRequest(json_body={"run_id": "492"}))[0])
+    assert verdict["reason"] == "transient" and verdict["is_retryable"] is True
+    assert verdict["run_href"] == "https://x"
