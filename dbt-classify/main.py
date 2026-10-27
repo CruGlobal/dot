@@ -145,8 +145,13 @@ def classify_run(request):
     except Exception as e:
         logger.exception(f"Could not build failure details for run {run_id}: {e}")
 
+    # Counts only: the alert text fields can quote a data value.
     logger.info(
         f"Classification for run {run_id}: reason={verdict['reason']} "
-        f"is_retryable={verdict['is_retryable']} prior_is_retry={verdict['prior_is_retry']}"
+        f"is_retryable={verdict['is_retryable']} prior_is_retry={verdict['prior_is_retry']} "
+        f"failures_listed={len(verdict.get('failure_details', []))} "
+        f"failures_omitted={verdict.get('failure_details_omitted', 0)} "
+        f"has_run_href={bool(verdict.get('run_href'))} "
+        f"has_step_error={bool(verdict.get('failed_step_error'))}"
     )
     return (json.dumps(verdict), 200, {"Content-Type": "application/json"})

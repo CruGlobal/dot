@@ -15,6 +15,7 @@ Every text field is Slack-escaped and meant to be posted, not logged: it is dbt 
 BigQuery error output, which can quote a data value.
 """
 
+import math
 import re
 
 from classifier import STEP_STATUS_ERROR
@@ -24,6 +25,9 @@ from classifier import STEP_STATUS_ERROR
 # failure_details_omitted and are one click away in the run.
 MAX_FAILURE_DETAILS = 5
 MESSAGE_CHARS = 400
+# failed_step_error is the post's only "why" when no listed failure gives one, and dbt's
+# summary names the node and its path (often twice) before the error itself.
+STEP_ERROR_CHARS = 1000
 
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 # Slack reads & < > as control characters in any text, including code blocks, so raw
@@ -97,13 +101,13 @@ def _count(number, unit: str) -> str:
 
 
 def _age(seconds) -> str:
-    if seconds >= SECONDS_PER_DAY:
-        return _count(int(seconds // SECONDS_PER_DAY), "day")
-    return _count(int(seconds // SECONDS_PER_HOUR), "hour")
+    """Rounded up to a tenth, so a source past a 14-day limit never reads "14 days"."""
+    unit, size = ("day", SECONDS_PER_DAY) if seconds >= SECONDS_PER_DAY else ("hour", SECONDS_PER_HOUR)
+    return _count(math.ceil(seconds * 10 / size) / 10, unit)
 
 
 def _staleness(source: dict) -> str:
-    """e.g. "last loaded 29 days ago (2026-09-21); fails after 14 days"."""
+    """e.g. "last loaded 29.5 days ago (2026-09-21); fails after 14 days"."""
     parts = []
     age = source.get("max_loaded_at_time_ago_in_s")
     if age is not None:
@@ -118,7 +122,7 @@ def _staleness(source: dict) -> str:
 def _detail(unique_id, status, message) -> dict:
     unique_id = unique_id or ""
     return {
-        "resource_type": unique_id.split(".", 1)[0],
+        "resource_type": slack_text(unique_id.split(".", 1)[0]),
         "name": slack_text(node_name(unique_id)),
         "status": status,
         "message": slack_text(message),
@@ -159,7 +163,7 @@ def log_error_summary(logs) -> str:
     if ends:
         text = text[: min(ends)]
     lines = (line.rstrip() for line in LOG_TIMESTAMP.sub("", text).splitlines())
-    return slack_text("\n".join(line for line in lines if line.strip()))
+    return slack_text("\n".join(line for line in lines if line.strip()), STEP_ERROR_CHARS)
 
 
 def job_href(run_data: dict) -> str:
@@ -184,19 +188,23 @@ def describe(run_data, results=None, sources=None, job_name="") -> dict:
 
     Errors (a model, seed or source that did not build or is stale) are listed before
     test failures, so a broken build is never hidden behind a list of failing tests.
-    failed_step_error is filled only when no artifact names a failure.
+    failed_step_error is filled only when no listed failure says why: none was found, or
+    each has an empty message, as a failed `dbt run-operation` often does.
     """
     run_data = run_data or {}
     step = failed_step(run_data)
     details = sorted(result_details(results) + freshness_details(sources),
                      key=lambda d: d["status"] == "fail")
+    listed = details[:MAX_FAILURE_DETAILS]
     return {
         "run_href": run_data.get("href") or "",
         "job_href": job_href(run_data),
         "job_name": slack_text(JOB_IDENTIFIER_SUFFIX.sub("", job_name or "")),
         "trigger_cause": slack_text((run_data.get("trigger") or {}).get("cause")),
         "failed_step": slack_text(step_command(step)),
-        "failure_details": details[:MAX_FAILURE_DETAILS],
-        "failure_details_omitted": max(len(details) - MAX_FAILURE_DETAILS, 0),
-        "failed_step_error": "" if details else log_error_summary((step or {}).get("logs")),
+        "failure_details": listed,
+        "failure_details_omitted": len(details) - len(listed),
+        "failed_step_error": (
+            "" if any(d["message"] for d in listed) else log_error_summary((step or {}).get("logs"))
+        ),
     }

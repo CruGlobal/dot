@@ -252,6 +252,17 @@ def test_read_client_empty_dbt_base_url_uses_default(monkeypatch):
     assert client.account_url == "https://kw745.us1.dbt.com/api/v2/accounts/10206"
 
 
+def test_read_client_fetches_each_artifact_by_name(monkeypatch):
+    get = mock.Mock()
+    get.return_value.json.return_value = {"results": []}
+    monkeypatch.setattr(dbt_client.requests, "get", get)
+    client = dbt_client.DbtReadClient(access_token="t", account_id="1")
+    client.get_run_sources("9")
+    assert get.call_args[0][0].endswith("/runs/9/artifacts/sources.json")
+    client.get_run_results("9")
+    assert get.call_args[0][0].endswith("/runs/9/artifacts/run_results.json")
+
+
 # --------------------------------------------------------------------------
 # failure_details — the alert fields
 # --------------------------------------------------------------------------
@@ -350,6 +361,11 @@ def test_slack_text_escapes_what_slack_would_read_as_a_link_or_mention():
     )
 
 
+def test_slack_text_cuts_before_escaping_so_no_entity_is_split():
+    escaped = failure_details.slack_text("<" * 1000)
+    assert escaped == "&lt;" * (failure_details.MESSAGE_CHARS - 1) + "…"
+
+
 def test_every_text_field_is_escaped():
     run = dict(failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt run --select <x>`",
                                   "logs": RUNTIME_ERROR_LOG.replace("manifest", "<!channel>")}]),
@@ -357,8 +373,12 @@ def test_every_text_field_is_escaped():
     d = failure_details.describe(run, [], job_name="<!here>")
     for field in ("job_name", "trigger_cause", "failed_step", "failed_step_error"):
         assert "<" not in d[field] and "&lt;" in d[field], field
-    [detail] = failure_details.result_details([result("error", "ARRAY<STRUCT<a INT64>>", "model.proj.m")])
+    [detail] = failure_details.result_details(
+        [result("error", "ARRAY<STRUCT<a INT64>>", "model<x>.proj.m<y>")]
+    )
     assert detail["message"] == "ARRAY&lt;STRUCT&lt;a INT64&gt;&gt;"
+    assert detail["resource_type"] == "model&lt;x&gt;"
+    assert detail["name"] == "m&lt;y&gt;"
 
 
 def test_failed_step_is_clipped():
@@ -387,7 +407,7 @@ def test_freshness_failures_come_from_sources_json():
     d = failure_details.describe(run, [result("success", "", "model.proj.ok")], sources)
     assert d["failure_details"] == [
         {"resource_type": "source", "name": "crm.contacts", "status": "error",
-         "message": "last loaded 29 days ago (2026-09-21); fails after 14 days"},
+         "message": "last loaded 29.5 days ago (2026-09-21); fails after 14 days"},
         {"resource_type": "source", "name": "crm.notes", "status": "runtime error",
          "message": "Database Error\n  Access Denied"},
     ]
@@ -398,7 +418,15 @@ def test_staleness_under_a_day_is_in_hours():
               "max_loaded_at_time_ago_in_s": 5.5 * 3600,
               "criteria": {"error_after": {"count": 1, "period": "hour"}}}
     [detail] = failure_details.freshness_details([source])
-    assert detail["message"] == "last loaded 5 hours ago; fails after 1 hour"
+    assert detail["message"] == "last loaded 5.5 hours ago; fails after 1 hour"
+
+
+def test_staleness_age_never_reads_as_the_limit():
+    source = {"unique_id": "source.proj.crm.contacts", "status": "error",
+              "max_loaded_at_time_ago_in_s": 14.02 * 86400,
+              "criteria": {"error_after": {"count": 14, "period": "day"}}}
+    [detail] = failure_details.freshness_details([source])
+    assert detail["message"] == "last loaded 14.1 days ago; fails after 14 days"
 
 
 def test_needs_sources_only_when_the_freshness_step_failed():
@@ -448,6 +476,31 @@ def test_failed_step_error_for_freshness_starts_at_the_first_failed_source():
     assert failure_details.describe(run, None, None)["failed_step_error"] == (
         "Failure in source contacts (models/staging/crm/_src_crm.yml)\nStatus: error"
     )
+
+
+def test_no_failed_step_error_when_a_listed_failure_says_why():
+    run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt build`",
+                             "logs": NODE_SUMMARY_LOG}])
+    d = failure_details.describe(run, [result("fail", "Got 2 results", "test.proj.t")])
+    assert d["failed_step_error"] == ""
+
+
+def test_failed_step_error_when_no_listed_failure_says_why():
+    # A failed `dbt run-operation` often writes its macro to run_results.json with no message.
+    run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt run-operation grants`",
+                             "logs": RUNTIME_ERROR_LOG}])
+    d = failure_details.describe(run, [result("error", None, "macro.proj.grants")])
+    assert d["failure_details"] == [
+        {"resource_type": "macro", "name": "grants", "status": "error", "message": ""}
+    ]
+    assert d["failed_step_error"].startswith("Encountered an error:\nRuntime Error")
+
+
+def test_failed_step_error_has_its_own_longer_limit():
+    run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt build`",
+                             "logs": "Encountered an error:\n" + "x" * 5000}])
+    step_error = failure_details.describe(run, None)["failed_step_error"]
+    assert len(step_error) == failure_details.STEP_ERROR_CHARS and step_error.endswith("…")
 
 
 def test_failed_step_error_is_empty_without_a_dbt_error_summary():
@@ -538,3 +591,15 @@ def test_handler_details_never_replace_a_classifier_field(monkeypatch):
     verdict = json.loads(main.classify_run(FakeRequest(json_body={"run_id": "492"}))[0])
     assert verdict["reason"] == "transient" and verdict["is_retryable"] is True
     assert verdict["run_href"] == "https://x"
+
+
+def test_handler_logs_alert_field_counts_never_their_text(monkeypatch, capsys):
+    fake = mock.Mock()
+    fake.get_run.return_value = failed_run()
+    fake.get_run_results.return_value = [result("fail", "value 'jane@example.org' found", "test.proj.t")]
+    monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
+
+    main.classify_run(FakeRequest(json_body={"run_id": "521187447", "job_name": "WorkVivo"}))
+    logged = capsys.readouterr().out
+    assert "failures_listed=1 failures_omitted=0 has_run_href=True has_step_error=False" in logged
+    assert "jane@example.org" not in logged
