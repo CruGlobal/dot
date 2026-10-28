@@ -85,10 +85,13 @@ dbt Cloud job fails (status_code=20)
 Pub/Sub topic: dbt-retry-events
   → Eventarc → Cloud Workflow (dbt-retry-workflow) -- stays thin
     → POST to the dbt-classify Cloud Function (OIDC) with {account_id, run_id}
+      (+ job_name, optional, for the alert fields)
         dbt-classify (Python) fetches the run metadata (include_related=
-        ["trigger","run_steps"]) + run_results.json, applies the loop guard +
-        transient allowlist, and returns a small verdict:
-          { reason, is_retryable, prior_is_retry, failed_count, run_created_at, … }
+        ["trigger","run_steps"]) + run_results.json (+ sources.json when a
+        source freshness step failed the run), applies the loop guard + transient
+        allowlist, and returns a small verdict:
+          { reason, is_retryable, prior_is_retry, failed_count, run_created_at,
+            run_href, job_name, failed_step, failure_details, … }
     → branch on the verdict:
         · prior_is_retry              → DBT_JOB_RETRY_EXHAUSTED, stop
         · reason metadata_unavailable → DBT_JOB_RETRY_GUARD_UNCERTAIN, stop (fail-closed)
@@ -108,6 +111,7 @@ Pub/Sub topic: dbt-retry-events
 - **Fail-closed** — if `dbt-classify` cannot read the run metadata it returns `metadata_unavailable`; the workflow then cannot confirm the run was not already a retry, so it does not retry. A missed retry of a genuine transient is cheap (re-run by hand); an uncapped retry loop is not.
 - **Multi-step cross-check** — `run_steps` is read to detect step-level errors; if a step errored but `run_results.json` explains no failed node, the failure is command-level/uncovered and is not retried.
 - **Dedup stays in the workflow** — the small list-runs check (skip as superseded if a newer run for the job already exists) is cheap and remains in the workflow; only the large-artifact read+classify moved to the function.
+- **What failed, for a human** — `dbt-classify` also returns the run and job links, the job name, the failed step, and up to five failures with their messages (from `run_results.json`, or from `sources.json` for a failed freshness step), plus dbt's error summary from the step log when none of them says why, so an alert can say what broke without opening dbt Cloud. This lives in `dbt-classify/failure_details.py`, apart from the classifier, and never affects the retry decision: it reads nothing the classifier does not already fetch except `sources.json`, no field can replace a classifier field, and if it fails (including a field that cannot be sent as JSON) the verdict is returned without it. The text fields are Slack-escaped and are for posting, not logging: they are dbt and BigQuery error output, which can quote a data value. The function's log line carries only counts of them, or `alert_fields=unavailable` when they could not be built.
 - **Classification is unit-tested** — the logic lives in `dbt-classify/classifier.py` with a unit-test suite (`main_test.py`), covering each rule (transient match, test-failure, unknown error, mixed, no-results, uncovered-step, loop guard, fail-closed). It used to be untestable Cloud Workflows YAML.
 - **5-minute delay** — gives transient issues (network, API rate limits) time to clear without delaying escalation much.
 - **Alerting** — `DBT_JOB_NOT_RETRYABLE`, `DBT_JOB_RETRY_EXHAUSTED`, and `DBT_JOB_RETRY_GUARD_UNCERTAIN` are emitted as ERROR-severity logs and surfaced by a Datadog monitor, so failures the workflow will not auto-fix escalate to a human.

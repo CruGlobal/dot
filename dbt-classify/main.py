@@ -6,6 +6,7 @@ import functions_framework
 
 from dbt_client import DbtReadClient
 import classifier
+import failure_details
 
 logger = logging.getLogger("primary_logger")
 logger.propagate = False
@@ -69,9 +70,13 @@ def _parse_request(request):
 def classify_run(request):
     """Classify a failed dbt Cloud run as retryable (transient) or not.
 
-    Input  (POST JSON): {"run_id": "...", "account_id": "..."}  (account_id optional)
+    Input  (POST JSON): {"run_id": "...", "account_id": "...", "job_name": "..."}
+                        (account_id and job_name optional)
     Output (JSON):      the verdict from classifier.decide() -- reason, is_retryable,
-                        prior_is_retry, counts, failed_nodes, run_created_at.
+                        prior_is_retry, counts, failed_nodes, run_created_at -- plus the
+                        alert fields from failure_details.describe(): run and job links,
+                        job name, trigger cause, failed step, and what failed and why
+                        (absent when they could not be built).
 
     The retry workflow calls this so the large run_results.json is parsed here (Python)
     rather than held in a Cloud Workflow variable (which exceeds the Workflows memory
@@ -122,8 +127,41 @@ def classify_run(request):
     verdict = classifier.decide(
         run_data, results, results_fetch_failed=results_fetch_failed
     )
+
+    # The alert fields are extra: everything that could fail on them happens in this
+    # block, so a failure here is logged and the verdict goes back without them. A field
+    # can never replace a classifier field either, so a details bug can never cost a retry.
+    alert_counts = "alert_fields=unavailable"
+    try:
+        sources = None
+        if failure_details.needs_sources(run_data):
+            try:
+                sources = client.get_run_sources(run_id)
+            except Exception as e:
+                logger.warning(f"Could not fetch sources.json for run {run_id}: {e}")
+        details = failure_details.describe(
+            run_data, results, sources, job_name=request_json.get("job_name")
+        )
+        # A field that is not plain JSON fails here, inside the guard. Unchecked, it would
+        # break the response below: json.dumps(verdict) would raise on it, or write a NaN
+        # or Infinity the workflow cannot parse.
+        json.dumps(details, allow_nan=False)
+        # Counts only: the alert text fields can quote a data value. ":d" refuses a
+        # non-integer, naming only its type.
+        alert_counts = (
+            f"failures_listed={len(details['failure_details'])} "
+            f"failures_omitted={details['failure_details_omitted']:d} "
+            f"has_run_href={bool(details['run_href'])} "
+            f"has_step_error={bool(details['failed_step_error'])}"
+        )
+        for key, value in details.items():
+            verdict.setdefault(key, value)
+    except Exception as e:
+        logger.exception(f"Could not build failure details for run {run_id}: {e}")
+
     logger.info(
         f"Classification for run {run_id}: reason={verdict['reason']} "
-        f"is_retryable={verdict['is_retryable']} prior_is_retry={verdict['prior_is_retry']}"
+        f"is_retryable={verdict['is_retryable']} prior_is_retry={verdict['prior_is_retry']} "
+        f"{alert_counts}"
     )
     return (json.dumps(verdict), 200, {"Content-Type": "application/json"})

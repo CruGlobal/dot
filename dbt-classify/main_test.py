@@ -5,6 +5,7 @@ import pytest
 
 import classifier
 import dbt_client
+import failure_details
 import main
 
 
@@ -249,3 +250,467 @@ def test_read_client_empty_dbt_base_url_uses_default(monkeypatch):
     monkeypatch.setenv("DBT_BASE_URL", "")
     client = dbt_client.DbtReadClient(access_token="t", account_id="10206")
     assert client.account_url == "https://kw745.us1.dbt.com/api/v2/accounts/10206"
+
+
+def test_read_client_run_fetch_asks_only_for_what_the_classifier_needs(monkeypatch):
+    # The retry decision fails closed on this fetch, so it must not depend on any
+    # other read permission (the job, for one).
+    get = mock.Mock()
+    get.return_value.json.return_value = {"data": {}}
+    monkeypatch.setattr(dbt_client.requests, "get", get)
+    dbt_client.DbtReadClient(access_token="t", account_id="1").get_run("9")
+    assert get.call_args.kwargs["params"] == {"include_related": '["trigger","run_steps"]'}
+
+
+def test_read_client_fetches_each_artifact_by_name(monkeypatch):
+    get = mock.Mock()
+    get.return_value.json.return_value = {"results": []}
+    monkeypatch.setattr(dbt_client.requests, "get", get)
+    client = dbt_client.DbtReadClient(access_token="t", account_id="1")
+    client.get_run_sources("9")
+    assert get.call_args[0][0].endswith("/runs/9/artifacts/sources.json")
+    client.get_run_results("9")
+    assert get.call_args[0][0].endswith("/runs/9/artifacts/run_results.json")
+
+
+# --------------------------------------------------------------------------
+# failure_details — the alert fields
+# --------------------------------------------------------------------------
+def failed_run(steps=None):
+    return {
+        "href": "https://dbt.test/deploy/1/projects/2/runs/521187447/",
+        "job_definition_id": 1045497,
+        "trigger": {"cause": "Triggered by completion of run 521184944"},
+        "run_steps": steps if steps is not None else [
+            {"status": 10, "name": "Invoke dbt with `dbt deps`"},
+            {"status": 20, "name": "Invoke dbt with `dbt build --selector release`", "logs": ""},
+        ],
+    }
+
+
+def freshness_step(logs=""):
+    return {"status": 20, "name": "Invoke dbt with `dbt source freshness --vars 'next: true'`",
+            "logs": logs}
+
+
+# Step logs as dbt Cloud returns them: timestamped lines, colour codes, closing notes.
+RUNTIME_ERROR_LOG = (
+    "19:05:22  Found 2153 models, 520 sources\n"
+    "19:05:23  Encountered an error:\n"
+    "Runtime Error\n"
+    "  Got a state selector method, but no comparison manifest\n"
+    "19:05:23  [\x1b[33mWARNING\x1b[0m][DeprecationsSummary]: Deprecated functionality\n"
+    "Summary of encountered deprecations:\n"
+    "dbt command failed"
+)
+NODE_SUMMARY_LOG = (
+    "20:36:09  Completed with 1 error, 0 partial successes, and 0 warnings:\n"
+    "20:36:09  \n"
+    "20:36:09\n"
+    "20:36:09  \x1b[31mFailure in test test_x (tests/test_x.sql)\x1b[0m\n"
+    "20:36:09\n"
+    "20:36:09    Got 2 results, configured to fail if != 0\n"
+    "20:36:09  \n"
+    "20:36:09  Done. PASS=14 WARN=0 ERROR=1 SKIP=6 NO-OP=0 REUSED=0 TOTAL=21\n"
+    "dbt command failed"
+)
+FRESHNESS_LOG = (
+    "07:12:30  1 of 2 ERROR STALE freshness of crm.contacts [ERROR STALE in 1.20s]\n"
+    "07:12:47  \x1b[31mFailure in source contacts (models/staging/crm/_src_crm.yml)\x1b[0m\n"
+    "07:12:47\n"
+    "07:12:47    Status: error\n"
+    "07:12:47  \x1b[31mFailure in source notes (models/staging/crm/_src_crm.yml)\x1b[0m\n"
+    "07:12:47\n"
+    "07:12:47    Status: runtime error\n"
+    "07:12:47  Done.\n"
+    "07:12:47  [\x1b[33mWARNING\x1b[0m][DeprecationsSummary]: Deprecated functionality\n"
+    "dbt command failed"
+)
+
+
+def test_describe_run_and_job_fields():
+    d = failure_details.describe(failed_run(), [], job_name="WorkVivo [[workvivo_prod]]")
+    assert d["run_href"] == "https://dbt.test/deploy/1/projects/2/runs/521187447/"
+    assert d["job_href"] == "https://dbt.test/deploy/1/projects/2/jobs/1045497/"
+    assert d["job_name"] == "WorkVivo"
+    assert d["trigger_cause"] == "Triggered by completion of run 521184944"
+    assert d["failed_step"] == "dbt build --selector release"
+
+
+def test_describe_lists_errors_before_test_failures():
+    results = [
+        result("fail", "Got 2 results, configured to fail if != 0",
+               "test.proj.not_null_orders_id.ab12cd34ef"),
+        result("success", "", "model.proj.ok"),
+        result("error", "Database Error\n  Not found: Table x", "model.proj.orders.v1"),
+    ]
+    d = failure_details.describe(failed_run(), results)
+    assert d["failure_details"] == [
+        {"resource_type": "model", "name": "orders.v1", "status": "error",
+         "message": "Database Error\n  Not found: Table x"},
+        {"resource_type": "test", "name": "not_null_orders_id", "status": "fail",
+         "message": "Got 2 results, configured to fail if != 0"},
+    ]
+    assert d["failure_details_omitted"] == 0
+    assert d["failed_step_error"] == ""
+
+
+def test_describe_caps_the_list_and_counts_the_rest():
+    results = [result("fail", "Got 1 result", f"test.proj.t{i}") for i in range(8)]
+    d = failure_details.describe(failed_run(), results)
+    assert len(d["failure_details"]) == failure_details.MAX_FAILURE_DETAILS
+    assert d["failure_details_omitted"] == 8 - failure_details.MAX_FAILURE_DETAILS
+
+
+def test_slack_text_strips_colour_codes_and_cuts_long_messages():
+    assert failure_details.slack_text("  \x1b[31mboom\x1b[0m \n") == "boom"
+    clipped = failure_details.slack_text("x" * 1000)
+    assert len(clipped) == failure_details.MESSAGE_CHARS and clipped.endswith("…")
+
+
+def test_slack_text_escapes_what_slack_would_read_as_a_link_or_mention():
+    assert failure_details.slack_text("<!here> & <https://x|reset>") == (
+        "&lt;!here&gt; &amp; &lt;https://x|reset&gt;"
+    )
+
+
+def test_slack_text_cuts_before_escaping_so_no_entity_is_split():
+    escaped = failure_details.slack_text("<" * 1000)
+    assert escaped == "&lt;" * (failure_details.MESSAGE_CHARS - 1) + "…"
+
+
+def test_every_text_field_is_escaped():
+    run = dict(failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt run --select <x>`",
+                                  "logs": RUNTIME_ERROR_LOG.replace("manifest", "<!channel>")}]),
+               trigger={"cause": "<!channel>"})
+    d = failure_details.describe(run, [], job_name="<!here>")
+    for field in ("job_name", "trigger_cause", "failed_step", "failed_step_error"):
+        assert "<" not in d[field] and "&lt;" in d[field], field
+    [detail] = failure_details.result_details(
+        [result("error", "ARRAY<STRUCT<a INT64>>", "model<x>.proj.m<y>")]
+    )
+    assert detail["message"] == "ARRAY&lt;STRUCT&lt;a INT64&gt;&gt;"
+    assert detail["resource_type"] == "model&lt;x&gt;"
+    assert detail["name"] == "m&lt;y&gt;"
+
+
+def test_failed_step_is_clipped():
+    run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt build " + "x" * 5000 + "`"}])
+    assert len(failure_details.describe(run, [])["failed_step"]) == failure_details.MESSAGE_CHARS
+
+
+def test_node_name():
+    assert failure_details.node_name("model.proj.orders.v1") == "orders.v1"
+    assert failure_details.node_name("test.proj.not_null_orders_id.ab12cd34ef") == "not_null_orders_id"
+    assert failure_details.node_name("test.proj.test_singular") == "test_singular"
+    assert failure_details.node_name("macro.proj.createRowAccessPoliciesForAll") == "createRowAccessPoliciesForAll"
+    assert failure_details.node_name("source.proj.crm.accounts") == "crm.accounts"
+
+
+def test_freshness_failures_come_from_sources_json():
+    sources = [
+        {"unique_id": "source.proj.crm.accounts", "status": "pass"},
+        {"unique_id": "source.proj.crm.contacts", "status": "error",
+         "max_loaded_at": "2026-09-21T19:39:29+00:00", "max_loaded_at_time_ago_in_s": 29.5 * 86400,
+         "criteria": {"error_after": {"count": 14, "period": "day"}}},
+        {"unique_id": "source.proj.crm.notes", "status": "runtime error",
+         "error": "Database Error\n  Access Denied"},
+        {"unique_id": "source.proj.crm.leads", "status": "warn",
+         "max_loaded_at_time_ago_in_s": 4 * 86400,
+         "criteria": {"warn_after": {"count": 3, "period": "day"}}},
+    ]
+    run = failed_run(steps=[freshness_step()])
+    d = failure_details.describe(run, [result("success", "", "model.proj.ok")], sources)
+    assert d["failure_details"] == [
+        {"resource_type": "source", "name": "crm.contacts", "status": "error",
+         "message": "last loaded 29.5 days ago (2026-09-21); fails after 14 days"},
+        {"resource_type": "source", "name": "crm.notes", "status": "runtime error",
+         "message": "Database Error\n  Access Denied"},
+    ]
+
+
+def test_staleness_under_a_day_is_in_hours():
+    source = {"unique_id": "source.proj.crm.contacts", "status": "error",
+              "max_loaded_at_time_ago_in_s": 5.5 * 3600,
+              "criteria": {"error_after": {"count": 1, "period": "hour"}}}
+    [detail] = failure_details.freshness_details([source])
+    assert detail["message"] == "last loaded 5.5 hours ago; fails after 1 hour"
+
+
+def test_staleness_age_never_reads_as_the_limit():
+    source = {"unique_id": "source.proj.crm.contacts", "status": "error",
+              "max_loaded_at_time_ago_in_s": 14.02 * 86400,
+              "criteria": {"error_after": {"count": 14, "period": "day"}}}
+    [detail] = failure_details.freshness_details([source])
+    assert detail["message"] == "last loaded 14.1 days ago; fails after 14 days"
+
+
+def test_needs_sources_only_when_the_freshness_step_failed():
+    assert failure_details.needs_sources(failed_run(steps=[freshness_step()])) is True
+    assert failure_details.needs_sources(failed_run()) is False
+    passed_freshness = [dict(freshness_step(), status=10),
+                        {"status": 20, "name": "Invoke dbt with `dbt build`"}]
+    assert failure_details.needs_sources(failed_run(steps=passed_freshness)) is False
+    freshness_then_docs = [freshness_step(),
+                           {"status": 10, "name": "Invoke dbt with `dbt docs generate`"}]
+    assert failure_details.needs_sources(failed_run(steps=freshness_then_docs)) is True
+    assert failure_details.needs_sources(None) is False
+
+
+def test_a_non_blocking_freshness_step_is_not_the_failed_step():
+    # A job's "Run source freshness" option: freshness errors first, the run carries on,
+    # and a later step is what failed it.
+    steps = [freshness_step(),
+             {"status": 10, "name": "Invoke dbt with `dbt build --selector raw_and_staging`"},
+             {"status": 20, "name": "Invoke dbt with `dbt build --selector unittest`"},
+             {"status": 40, "name": "Invoke dbt with `dbt run --selector release`"}]
+    run = failed_run(steps=steps)
+    assert failure_details.describe(run, [])["failed_step"] == "dbt build --selector unittest"
+    assert failure_details.needs_sources(run) is False
+
+
+def test_failed_step_error_from_a_command_level_error():
+    run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt run --selector x`",
+                             "logs": RUNTIME_ERROR_LOG}])
+    d = failure_details.describe(run, [result("success", "", "model.proj.ok")])
+    assert d["failure_details"] == []
+    assert d["failed_step_error"] == (
+        "Encountered an error:\nRuntime Error\n"
+        "  Got a state selector method, but no comparison manifest"
+    )
+
+
+def test_failed_step_error_starts_at_the_last_error_summary():
+    logs = ("10:00:00  Encountered an error:\nCompilation Error\n  first\n"
+            "10:00:01  Encountered an error:\nRuntime Error\n  second\n"
+            "dbt command failed")
+    run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt run`", "logs": logs}])
+    assert failure_details.describe(run, None)["failed_step_error"] == (
+        "Encountered an error:\nRuntime Error\n  second"
+    )
+
+
+def test_failed_step_error_when_run_results_is_missing():
+    run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt build`",
+                             "logs": NODE_SUMMARY_LOG}])
+    assert failure_details.describe(run, None)["failed_step_error"] == (
+        "Completed with 1 error, 0 partial successes, and 0 warnings:\n"
+        "Failure in test test_x (tests/test_x.sql)\n"
+        "Got 2 results, configured to fail if != 0"
+    )
+
+
+def test_failed_step_error_for_freshness_starts_at_the_first_failed_source():
+    run = failed_run(steps=[freshness_step(logs=FRESHNESS_LOG)])
+    assert failure_details.describe(run, None, None)["failed_step_error"] == (
+        "Failure in source contacts (models/staging/crm/_src_crm.yml)\nStatus: error\n"
+        "Failure in source notes (models/staging/crm/_src_crm.yml)\nStatus: runtime error"
+    )
+
+
+def test_no_failed_step_error_when_a_listed_failure_says_why():
+    run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt build`",
+                             "logs": NODE_SUMMARY_LOG}])
+    d = failure_details.describe(run, [result("fail", "Got 2 results", "test.proj.t")])
+    assert d["failed_step_error"] == ""
+
+
+def test_failed_step_error_when_no_listed_failure_says_why():
+    # A failed `dbt run-operation` often writes its macro to run_results.json with no message.
+    run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt run-operation grants`",
+                             "logs": RUNTIME_ERROR_LOG}])
+    d = failure_details.describe(run, [result("error", None, "macro.proj.grants")])
+    assert d["failure_details"] == [
+        {"resource_type": "macro", "name": "grants", "status": "error", "message": ""}
+    ]
+    assert d["failed_step_error"].startswith("Encountered an error:\nRuntime Error")
+
+
+def test_failed_step_error_has_its_own_longer_limit():
+    run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt build`",
+                             "logs": "Encountered an error:\n" + "x" * 5000}])
+    step_error = failure_details.describe(run, None)["failed_step_error"]
+    assert len(step_error) == failure_details.STEP_ERROR_CHARS and step_error.endswith("…")
+
+
+def test_failed_step_error_is_empty_without_a_dbt_error_summary():
+    run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt deps`",
+                             "logs": "12:00:00  Running dbt...\ndbt command failed"}])
+    assert failure_details.describe(run, None)["failed_step_error"] == ""
+
+
+def test_describe_without_run_metadata_keeps_only_the_given_job_name():
+    d = failure_details.describe(None, None, job_name="GodTools [[godtools_prod]]")
+    assert d["job_name"] == "GodTools"
+    assert d["run_href"] == d["job_href"] == d["trigger_cause"] == d["failed_step"] == ""
+    assert d["failure_details"] == [] and d["failure_details_omitted"] == 0
+    assert d["failed_step_error"] == ""
+
+
+def test_job_href_is_empty_when_the_run_link_has_an_unexpected_shape():
+    run = dict(failed_run(), href="https://dbt.test/somewhere/else")
+    assert failure_details.job_href(run) == ""
+
+
+# --------------------------------------------------------------------------
+# main.classify_run — alert fields
+# --------------------------------------------------------------------------
+def test_handler_adds_failure_details_to_the_verdict(monkeypatch):
+    fake = mock.Mock()
+    fake.get_run.return_value = failed_run()
+    fake.get_run_results.return_value = [result("fail", "Got 2 results", "test.proj.t")]
+    monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
+
+    body = {"run_id": "521187447", "job_name": "WorkVivo [[workvivo_prod]]"}
+    verdict = json.loads(main.classify_run(FakeRequest(json_body=body))[0])
+    assert verdict["reason"] == "nontransient"
+    assert verdict["job_name"] == "WorkVivo"
+    assert verdict["failure_details"][0]["name"] == "t"
+    fake.get_run_sources.assert_not_called()
+
+
+def test_handler_reads_sources_json_for_a_failed_freshness_step(monkeypatch):
+    fake = mock.Mock()
+    fake.get_run.return_value = failed_run(steps=[freshness_step()])
+    fake.get_run_results.return_value = [result("success", "", "model.proj.ok")]
+    fake.get_run_sources.return_value = [{"unique_id": "source.proj.crm.contacts", "status": "error"}]
+    monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
+
+    verdict = json.loads(main.classify_run(FakeRequest(json_body={"run_id": "520774029"}))[0])
+    assert verdict["reason"] == "uncovered_step"
+    assert verdict["failure_details"][0]["name"] == "crm.contacts"
+
+
+def test_handler_sources_fetch_failure_falls_back_to_the_log(monkeypatch):
+    fake = mock.Mock()
+    fake.get_run.return_value = failed_run(steps=[freshness_step(logs=FRESHNESS_LOG)])
+    fake.get_run_results.return_value = [result("success", "", "model.proj.ok")]
+    fake.get_run_sources.side_effect = RuntimeError("artifact 404")
+    monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
+
+    resp = main.classify_run(FakeRequest(json_body={"run_id": "520774029"}))
+    assert resp[1] == 200
+    verdict = json.loads(resp[0])
+    assert verdict["reason"] == "uncovered_step"
+    assert verdict["failure_details"] == []
+    assert verdict["failed_step_error"].startswith("Failure in source contacts")
+
+
+def test_handler_details_failure_never_changes_the_verdict(monkeypatch):
+    fake = mock.Mock()
+    fake.get_run.return_value = run_data(steps=[ERR_STEP])
+    fake.get_run_results.return_value = [result("error", "Resources exceeded")]
+    monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
+    monkeypatch.setattr(failure_details, "describe", mock.Mock(side_effect=RuntimeError("bug")))
+
+    resp = main.classify_run(FakeRequest(json_body={"run_id": "492"}))
+    assert resp[1] == 200
+    verdict = json.loads(resp[0])
+    assert verdict["reason"] == "transient" and verdict["is_retryable"] is True
+    assert "failure_details" not in verdict
+
+
+def test_handler_details_never_replace_a_classifier_field(monkeypatch):
+    fake = mock.Mock()
+    fake.get_run.return_value = run_data(steps=[ERR_STEP])
+    fake.get_run_results.return_value = [result("error", "Resources exceeded")]
+    monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
+    clashing = dict(failure_details.describe(None),
+                    reason="nontransient", is_retryable=False, run_href="https://x")
+    monkeypatch.setattr(failure_details, "describe", mock.Mock(return_value=clashing))
+
+    verdict = json.loads(main.classify_run(FakeRequest(json_body={"run_id": "492"}))[0])
+    assert verdict["reason"] == "transient" and verdict["is_retryable"] is True
+    assert verdict["run_href"] == "https://x"
+
+
+def test_handler_logs_alert_field_counts_never_their_text(monkeypatch, capsys):
+    fake = mock.Mock()
+    fake.get_run.return_value = failed_run()
+    fake.get_run_results.return_value = [result("fail", "value 'jane@example.org' found", "test.proj.t")]
+    monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
+
+    main.classify_run(FakeRequest(json_body={"run_id": "521187447", "job_name": "WorkVivo"}))
+    logged = capsys.readouterr().out
+    assert "failures_listed=1 failures_omitted=0 has_run_href=True has_step_error=False" in logged
+    assert "jane@example.org" not in logged
+
+
+def test_handler_logs_the_counts_for_the_listed_failures_only(monkeypatch, capsys):
+    # Seven errors with no message sort first and fill the list; the one test failure that
+    # says why sorts past the cap, so the step error is still filled.
+    run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt build`",
+                             "logs": RUNTIME_ERROR_LOG.replace("manifest", "'jane@example.org'")}])
+    del run["href"]
+    fake = mock.Mock()
+    fake.get_run.return_value = run
+    fake.get_run_results.return_value = (
+        [result("error", None, f"model.proj.m{i}") for i in range(7)]
+        + [result("fail", "Got 1 result", "test.proj.t")]
+    )
+    monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
+
+    verdict = json.loads(main.classify_run(FakeRequest(json_body={"run_id": "521187447"}))[0])
+    logged = capsys.readouterr().out
+    assert "failures_listed=5 failures_omitted=3 has_run_href=False has_step_error=True" in logged
+    assert "jane@example.org" not in logged
+    assert "jane@example.org" in verdict["failed_step_error"]
+
+
+def classify_with_details(monkeypatch, details):
+    """Run the handler on a transient failure, with describe() returning `details`."""
+    fake = mock.Mock()
+    fake.get_run.return_value = run_data(steps=[ERR_STEP])
+    fake.get_run_results.return_value = [result("error", "Resources exceeded")]
+    monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
+    monkeypatch.setattr(failure_details, "describe", mock.Mock(return_value=details))
+    return main.classify_run(FakeRequest(json_body={"run_id": "492"}))
+
+
+@pytest.mark.parametrize("bad", [
+    {"future_field": object()},
+    {"future_field": float("nan")},
+    {"future_field": float("inf")},
+])
+def test_handler_drops_details_that_cannot_be_sent_and_keeps_the_verdict(monkeypatch, capsys, bad):
+    resp = classify_with_details(monkeypatch, dict(failure_details.describe(None), **bad))
+    assert resp[1] == 200
+    assert "NaN" not in resp[0] and "Infinity" not in resp[0]
+    verdict = json.loads(resp[0])
+    assert verdict["reason"] == "transient" and verdict["is_retryable"] is True
+    assert "failure_details" not in verdict and not set(bad) & set(verdict)
+    logged = capsys.readouterr().out
+    assert "alert_fields=unavailable" in logged
+    assert "Could not build failure details" in logged
+    assert "Traceback (most recent call last)" in logged
+
+
+def test_handler_a_non_integer_count_never_reaches_the_log(monkeypatch, capsys):
+    details = dict(failure_details.describe(None), failure_details_omitted="jane@example.org")
+    resp = classify_with_details(monkeypatch, details)
+    assert resp[1] == 200
+    verdict = json.loads(resp[0])
+    assert verdict["reason"] == "transient" and "failure_details" not in verdict
+    logged = capsys.readouterr().out
+    assert "alert_fields=unavailable" in logged
+    assert "Could not build failure details" in logged
+    assert "Traceback (most recent call last)" in logged
+    assert "jane@example.org" not in logged
+
+
+def test_handler_a_malformed_step_drops_the_details_and_keeps_the_retry(monkeypatch, capsys):
+    # failure_details is not mocked: needs_sources() reads the step name as well, so it
+    # must sit inside the guard.
+    fake = mock.Mock()
+    fake.get_run.return_value = run_data(steps=[{"status": 20, "name": 5, "logs": "jane@example.org"}])
+    fake.get_run_results.return_value = [result("error", "Resources exceeded")]
+    monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
+
+    resp = main.classify_run(FakeRequest(json_body={"run_id": "492"}))
+    assert resp[1] == 200
+    verdict = json.loads(resp[0])
+    assert verdict["reason"] == "transient" and verdict["is_retryable"] is True
+    assert "failure_details" not in verdict
+    logged = capsys.readouterr().out
+    assert "alert_fields=unavailable" in logged
+    assert "jane@example.org" not in logged
