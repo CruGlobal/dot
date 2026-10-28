@@ -669,6 +669,7 @@ def test_handler_drops_details_that_cannot_be_sent_and_keeps_the_verdict(monkeyp
     logged = capsys.readouterr().out
     assert "alert_fields=unavailable" in logged
     assert "Could not build failure details" in logged
+    assert "Traceback (most recent call last)" in logged
 
 
 def test_handler_a_non_integer_count_never_reaches_the_log(monkeypatch, capsys):
@@ -680,4 +681,20 @@ def test_handler_a_non_integer_count_never_reaches_the_log(monkeypatch, capsys):
     logged = capsys.readouterr().out
     assert "alert_fields=unavailable" in logged
     assert "Could not build failure details" in logged
+    assert "Traceback (most recent call last)" in logged
     assert "jane@example.org" not in logged
+
+
+def test_handler_a_malformed_step_drops_the_details_and_keeps_the_retry(monkeypatch, capsys):
+    # Unmocked: needs_sources() reads the step name as well, so it must sit inside the guard.
+    fake = mock.Mock()
+    fake.get_run.return_value = run_data(steps=[{"status": 20, "name": 5}])
+    fake.get_run_results.return_value = [result("error", "Resources exceeded")]
+    monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
+
+    resp = main.classify_run(FakeRequest(json_body={"run_id": "492"}))
+    assert resp[1] == 200
+    verdict = json.loads(resp[0])
+    assert verdict["reason"] == "transient" and verdict["is_retryable"] is True
+    assert "failure_details" not in verdict
+    assert "alert_fields=unavailable" in capsys.readouterr().out

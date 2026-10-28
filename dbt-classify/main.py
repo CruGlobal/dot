@@ -144,7 +144,7 @@ def classify_run(request):
         )
         # A field that is not plain JSON fails here, inside the guard. Unchecked, it would
         # break the response below: json.dumps(verdict) would raise on it, or write a NaN
-        # the workflow cannot parse.
+        # or Infinity the workflow cannot parse.
         json.dumps(details, allow_nan=False)
         # Counts only: the alert text fields can quote a data value. ":d" refuses a
         # non-integer, naming only its type.
