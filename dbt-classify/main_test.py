@@ -402,6 +402,9 @@ def test_freshness_failures_come_from_sources_json():
          "criteria": {"error_after": {"count": 14, "period": "day"}}},
         {"unique_id": "source.proj.crm.notes", "status": "runtime error",
          "error": "Database Error\n  Access Denied"},
+        {"unique_id": "source.proj.crm.leads", "status": "warn",
+         "max_loaded_at_time_ago_in_s": 4 * 86400,
+         "criteria": {"warn_after": {"count": 3, "period": "day"}}},
     ]
     run = failed_run(steps=[freshness_step()])
     d = failure_details.describe(run, [result("success", "", "model.proj.ok")], sources)
@@ -458,6 +461,16 @@ def test_failed_step_error_from_a_command_level_error():
     assert d["failed_step_error"] == (
         "Encountered an error:\nRuntime Error\n"
         "  Got a state selector method, but no comparison manifest"
+    )
+
+
+def test_failed_step_error_starts_at_the_last_error_summary():
+    logs = ("10:00:00  Encountered an error:\nCompilation Error\n  first\n"
+            "10:00:01  Encountered an error:\nRuntime Error\n  second\n"
+            "dbt command failed")
+    run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt run`", "logs": logs}])
+    assert failure_details.describe(run, None)["failed_step_error"] == (
+        "Encountered an error:\nRuntime Error\n  second"
     )
 
 
@@ -585,7 +598,8 @@ def test_handler_details_never_replace_a_classifier_field(monkeypatch):
     fake.get_run.return_value = run_data(steps=[ERR_STEP])
     fake.get_run_results.return_value = [result("error", "Resources exceeded")]
     monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
-    clashing = {"reason": "nontransient", "is_retryable": False, "run_href": "https://x"}
+    clashing = dict(failure_details.describe(None),
+                    reason="nontransient", is_retryable=False, run_href="https://x")
     monkeypatch.setattr(failure_details, "describe", mock.Mock(return_value=clashing))
 
     verdict = json.loads(main.classify_run(FakeRequest(json_body={"run_id": "492"}))[0])
@@ -603,3 +617,40 @@ def test_handler_logs_alert_field_counts_never_their_text(monkeypatch, capsys):
     logged = capsys.readouterr().out
     assert "failures_listed=1 failures_omitted=0 has_run_href=True has_step_error=False" in logged
     assert "jane@example.org" not in logged
+
+
+def test_handler_logs_the_counts_for_the_listed_failures_only(monkeypatch, capsys):
+    # Seven errors with no message sort first and fill the list; the one test failure that
+    # says why sorts past the cap, so the step error is still filled.
+    run = failed_run(steps=[{"status": 20, "name": "Invoke dbt with `dbt build`",
+                             "logs": RUNTIME_ERROR_LOG.replace("manifest", "'jane@example.org'")}])
+    del run["href"]
+    fake = mock.Mock()
+    fake.get_run.return_value = run
+    fake.get_run_results.return_value = (
+        [result("error", None, f"model.proj.m{i}") for i in range(7)]
+        + [result("fail", "Got 1 result", "test.proj.t")]
+    )
+    monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
+
+    verdict = json.loads(main.classify_run(FakeRequest(json_body={"run_id": "521187447"}))[0])
+    logged = capsys.readouterr().out
+    assert "failures_listed=5 failures_omitted=3 has_run_href=False has_step_error=True" in logged
+    assert "jane@example.org" not in logged
+    assert "jane@example.org" in verdict["failed_step_error"]
+
+
+def test_handler_drops_details_that_cannot_be_sent_and_keeps_the_verdict(monkeypatch, capsys):
+    fake = mock.Mock()
+    fake.get_run.return_value = run_data(steps=[ERR_STEP])
+    fake.get_run_results.return_value = [result("error", "Resources exceeded")]
+    monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
+    unsendable = dict(failure_details.describe(None), finished_at=object())
+    monkeypatch.setattr(failure_details, "describe", mock.Mock(return_value=unsendable))
+
+    resp = main.classify_run(FakeRequest(json_body={"run_id": "492"}))
+    assert resp[1] == 200
+    verdict = json.loads(resp[0])
+    assert verdict["reason"] == "transient" and verdict["is_retryable"] is True
+    assert "failure_details" not in verdict and "finished_at" not in verdict
+    assert "alert_fields=unavailable" in capsys.readouterr().out

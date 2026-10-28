@@ -127,9 +127,10 @@ def classify_run(request):
         run_data, results, results_fetch_failed=results_fetch_failed
     )
 
-    # The alert fields are extra: a failure here is logged and the verdict goes back
-    # without them, and a field can never replace a classifier field, so a details bug
-    # can never cost a retry.
+    # The alert fields are extra: everything that reads them happens in this block, so a
+    # failure here is logged and the verdict goes back without them. A field can never
+    # replace a classifier field either, so a details bug can never cost a retry.
+    alert_counts = "alert_fields=unavailable"
     try:
         sources = None
         if failure_details.needs_sources(run_data):
@@ -140,18 +141,22 @@ def classify_run(request):
         details = failure_details.describe(
             run_data, results, sources, job_name=request_json.get("job_name")
         )
+        json.dumps(details)
+        # Counts only: the alert text fields can quote a data value.
+        alert_counts = (
+            f"failures_listed={len(details['failure_details'])} "
+            f"failures_omitted={details['failure_details_omitted']} "
+            f"has_run_href={bool(details['run_href'])} "
+            f"has_step_error={bool(details['failed_step_error'])}"
+        )
         for key, value in details.items():
             verdict.setdefault(key, value)
     except Exception as e:
         logger.exception(f"Could not build failure details for run {run_id}: {e}")
 
-    # Counts only: the alert text fields can quote a data value.
     logger.info(
         f"Classification for run {run_id}: reason={verdict['reason']} "
         f"is_retryable={verdict['is_retryable']} prior_is_retry={verdict['prior_is_retry']} "
-        f"failures_listed={len(verdict.get('failure_details', []))} "
-        f"failures_omitted={verdict.get('failure_details_omitted', 0)} "
-        f"has_run_href={bool(verdict.get('run_href'))} "
-        f"has_step_error={bool(verdict.get('failed_step_error'))}"
+        f"{alert_counts}"
     )
     return (json.dumps(verdict), 200, {"Content-Type": "application/json"})
