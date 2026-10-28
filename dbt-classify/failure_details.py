@@ -42,7 +42,7 @@ TEST_HASH_SUFFIX = re.compile(r"^[0-9a-f]{10}$")
 RUN_PATH = re.compile(r"/runs/\d+/?$")
 # Each dbt log line starts with an "HH:MM:SS" timestamp.
 LOG_TIMESTAMP = re.compile(r"^\d{2}:\d{2}:\d{2}[ \t]*", re.MULTILINE)
-# dbt's own error summary in a step log starts at a command-level error or at the
+# dbt's own error summary in a step log starts at the last command-level error or
 # per-node summary (or, for `dbt source freshness`, which prints no summary line, at
 # its first failed source), and ends where the closing tally or deprecation notes begin.
 LOG_ERROR_START = ("Encountered an error", "Completed with")

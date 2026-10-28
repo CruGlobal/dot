@@ -75,7 +75,8 @@ def classify_run(request):
     Output (JSON):      the verdict from classifier.decide() -- reason, is_retryable,
                         prior_is_retry, counts, failed_nodes, run_created_at -- plus the
                         alert fields from failure_details.describe(): run and job links,
-                        job name, trigger cause, failed step, and what failed and why.
+                        job name, trigger cause, failed step, and what failed and why
+                        (absent when they could not be built).
 
     The retry workflow calls this so the large run_results.json is parsed here (Python)
     rather than held in a Cloud Workflow variable (which exceeds the Workflows memory
@@ -127,9 +128,9 @@ def classify_run(request):
         run_data, results, results_fetch_failed=results_fetch_failed
     )
 
-    # The alert fields are extra: everything that reads them happens in this block, so a
-    # failure here is logged and the verdict goes back without them. A field can never
-    # replace a classifier field either, so a details bug can never cost a retry.
+    # The alert fields are extra: everything that could fail on them happens in this
+    # block, so a failure here is logged and the verdict goes back without them. A field
+    # can never replace a classifier field either, so a details bug can never cost a retry.
     alert_counts = "alert_fields=unavailable"
     try:
         sources = None
@@ -141,11 +142,14 @@ def classify_run(request):
         details = failure_details.describe(
             run_data, results, sources, job_name=request_json.get("job_name")
         )
-        json.dumps(details)
-        # Counts only: the alert text fields can quote a data value.
+        # A field that is not plain JSON fails here, inside the guard, rather than at the
+        # json.dumps(verdict) below, which the workflow would see as a failed call.
+        json.dumps(details, allow_nan=False)
+        # Counts only: the alert text fields can quote a data value. ":d" refuses a
+        # non-integer, naming only its type.
         alert_counts = (
             f"failures_listed={len(details['failure_details'])} "
-            f"failures_omitted={details['failure_details_omitted']} "
+            f"failures_omitted={details['failure_details_omitted']:d} "
             f"has_run_href={bool(details['run_href'])} "
             f"has_step_error={bool(details['failed_step_error'])}"
         )

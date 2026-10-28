@@ -309,6 +309,9 @@ FRESHNESS_LOG = (
     "07:12:47  \x1b[31mFailure in source contacts (models/staging/crm/_src_crm.yml)\x1b[0m\n"
     "07:12:47\n"
     "07:12:47    Status: error\n"
+    "07:12:47  \x1b[31mFailure in source notes (models/staging/crm/_src_crm.yml)\x1b[0m\n"
+    "07:12:47\n"
+    "07:12:47    Status: runtime error\n"
     "07:12:47  Done.\n"
     "07:12:47  [\x1b[33mWARNING\x1b[0m][DeprecationsSummary]: Deprecated functionality\n"
     "dbt command failed"
@@ -487,7 +490,8 @@ def test_failed_step_error_when_run_results_is_missing():
 def test_failed_step_error_for_freshness_starts_at_the_first_failed_source():
     run = failed_run(steps=[freshness_step(logs=FRESHNESS_LOG)])
     assert failure_details.describe(run, None, None)["failed_step_error"] == (
-        "Failure in source contacts (models/staging/crm/_src_crm.yml)\nStatus: error"
+        "Failure in source contacts (models/staging/crm/_src_crm.yml)\nStatus: error\n"
+        "Failure in source notes (models/staging/crm/_src_crm.yml)\nStatus: runtime error"
     )
 
 
@@ -640,17 +644,26 @@ def test_handler_logs_the_counts_for_the_listed_failures_only(monkeypatch, capsy
     assert "jane@example.org" in verdict["failed_step_error"]
 
 
-def test_handler_drops_details_that_cannot_be_sent_and_keeps_the_verdict(monkeypatch, capsys):
+@pytest.mark.parametrize("bad", [
+    {"finished_at": object()},
+    {"age_days": float("nan")},
+    {"age_days": float("inf")},
+    {"failure_details_omitted": "jane@example.org"},
+])
+def test_handler_drops_details_that_cannot_be_sent_and_keeps_the_verdict(monkeypatch, capsys, bad):
     fake = mock.Mock()
     fake.get_run.return_value = run_data(steps=[ERR_STEP])
     fake.get_run_results.return_value = [result("error", "Resources exceeded")]
     monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
-    unsendable = dict(failure_details.describe(None), finished_at=object())
+    unsendable = dict(failure_details.describe(None), **bad)
     monkeypatch.setattr(failure_details, "describe", mock.Mock(return_value=unsendable))
 
     resp = main.classify_run(FakeRequest(json_body={"run_id": "492"}))
     assert resp[1] == 200
+    assert "NaN" not in resp[0] and "Infinity" not in resp[0]
     verdict = json.loads(resp[0])
     assert verdict["reason"] == "transient" and verdict["is_retryable"] is True
-    assert "failure_details" not in verdict and "finished_at" not in verdict
-    assert "alert_fields=unavailable" in capsys.readouterr().out
+    assert "failure_details" not in verdict and not set(bad) & set(verdict)
+    logged = capsys.readouterr().out
+    assert "alert_fields=unavailable" in logged
+    assert "jane@example.org" not in logged
