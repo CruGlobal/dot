@@ -644,21 +644,23 @@ def test_handler_logs_the_counts_for_the_listed_failures_only(monkeypatch, capsy
     assert "jane@example.org" in verdict["failed_step_error"]
 
 
-@pytest.mark.parametrize("bad", [
-    {"finished_at": object()},
-    {"age_days": float("nan")},
-    {"age_days": float("inf")},
-    {"failure_details_omitted": "jane@example.org"},
-])
-def test_handler_drops_details_that_cannot_be_sent_and_keeps_the_verdict(monkeypatch, capsys, bad):
+def classify_with_details(monkeypatch, details):
+    """Run the handler on a transient failure, with describe() returning `details`."""
     fake = mock.Mock()
     fake.get_run.return_value = run_data(steps=[ERR_STEP])
     fake.get_run_results.return_value = [result("error", "Resources exceeded")]
     monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
-    unsendable = dict(failure_details.describe(None), **bad)
-    monkeypatch.setattr(failure_details, "describe", mock.Mock(return_value=unsendable))
+    monkeypatch.setattr(failure_details, "describe", mock.Mock(return_value=details))
+    return main.classify_run(FakeRequest(json_body={"run_id": "492"}))
 
-    resp = main.classify_run(FakeRequest(json_body={"run_id": "492"}))
+
+@pytest.mark.parametrize("bad", [
+    {"finished_at": object()},
+    {"age_days": float("nan")},
+    {"age_days": float("inf")},
+])
+def test_handler_drops_details_that_cannot_be_sent_and_keeps_the_verdict(monkeypatch, capsys, bad):
+    resp = classify_with_details(monkeypatch, dict(failure_details.describe(None), **bad))
     assert resp[1] == 200
     assert "NaN" not in resp[0] and "Infinity" not in resp[0]
     verdict = json.loads(resp[0])
@@ -666,4 +668,16 @@ def test_handler_drops_details_that_cannot_be_sent_and_keeps_the_verdict(monkeyp
     assert "failure_details" not in verdict and not set(bad) & set(verdict)
     logged = capsys.readouterr().out
     assert "alert_fields=unavailable" in logged
+    assert "Could not build failure details" in logged
+
+
+def test_handler_a_non_integer_count_never_reaches_the_log(monkeypatch, capsys):
+    details = dict(failure_details.describe(None), failure_details_omitted="jane@example.org")
+    resp = classify_with_details(monkeypatch, details)
+    assert resp[1] == 200
+    verdict = json.loads(resp[0])
+    assert verdict["reason"] == "transient" and "failure_details" not in verdict
+    logged = capsys.readouterr().out
+    assert "alert_fields=unavailable" in logged
+    assert "Could not build failure details" in logged
     assert "jane@example.org" not in logged
