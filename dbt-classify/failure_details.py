@@ -186,8 +186,9 @@ def describe(run_data, results=None, sources=None, job_name="") -> dict:
                  needs_sources() is true).
         job_name: the job name the caller already has (dbt's webhook sends it).
 
-    Errors (a model, seed or source that did not build or is stale) are listed before
-    test failures, so a broken build is never hidden behind a list of failing tests.
+    Errors (a model, seed, operation or source that did not build or is stale, or a
+    test that could not run) are listed before test failures, so a broken build is
+    never hidden behind a list of failing tests.
     failed_step_error is filled only when no listed failure says why: none was found, or
     each has an empty message, as a failed `dbt run-operation` often does.
     """

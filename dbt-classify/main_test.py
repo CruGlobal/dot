@@ -252,6 +252,16 @@ def test_read_client_empty_dbt_base_url_uses_default(monkeypatch):
     assert client.account_url == "https://kw745.us1.dbt.com/api/v2/accounts/10206"
 
 
+def test_read_client_run_fetch_asks_only_for_what_the_classifier_needs(monkeypatch):
+    # The retry decision fails closed on this fetch, so it must not depend on any
+    # other read permission (the job, for one).
+    get = mock.Mock()
+    get.return_value.json.return_value = {"data": {}}
+    monkeypatch.setattr(dbt_client.requests, "get", get)
+    dbt_client.DbtReadClient(access_token="t", account_id="1").get_run("9")
+    assert get.call_args.kwargs["params"] == {"include_related": '["trigger","run_steps"]'}
+
+
 def test_read_client_fetches_each_artifact_by_name(monkeypatch):
     get = mock.Mock()
     get.return_value.json.return_value = {"results": []}
@@ -441,6 +451,9 @@ def test_needs_sources_only_when_the_freshness_step_failed():
     passed_freshness = [dict(freshness_step(), status=10),
                         {"status": 20, "name": "Invoke dbt with `dbt build`"}]
     assert failure_details.needs_sources(failed_run(steps=passed_freshness)) is False
+    freshness_then_docs = [freshness_step(),
+                           {"status": 10, "name": "Invoke dbt with `dbt docs generate`"}]
+    assert failure_details.needs_sources(failed_run(steps=freshness_then_docs)) is True
     assert failure_details.needs_sources(None) is False
 
 
@@ -655,9 +668,9 @@ def classify_with_details(monkeypatch, details):
 
 
 @pytest.mark.parametrize("bad", [
-    {"finished_at": object()},
-    {"age_days": float("nan")},
-    {"age_days": float("inf")},
+    {"future_field": object()},
+    {"future_field": float("nan")},
+    {"future_field": float("inf")},
 ])
 def test_handler_drops_details_that_cannot_be_sent_and_keeps_the_verdict(monkeypatch, capsys, bad):
     resp = classify_with_details(monkeypatch, dict(failure_details.describe(None), **bad))
@@ -686,9 +699,10 @@ def test_handler_a_non_integer_count_never_reaches_the_log(monkeypatch, capsys):
 
 
 def test_handler_a_malformed_step_drops_the_details_and_keeps_the_retry(monkeypatch, capsys):
-    # Unmocked: needs_sources() reads the step name as well, so it must sit inside the guard.
+    # failure_details is not mocked: needs_sources() reads the step name as well, so it
+    # must sit inside the guard.
     fake = mock.Mock()
-    fake.get_run.return_value = run_data(steps=[{"status": 20, "name": 5}])
+    fake.get_run.return_value = run_data(steps=[{"status": 20, "name": 5, "logs": "jane@example.org"}])
     fake.get_run_results.return_value = [result("error", "Resources exceeded")]
     monkeypatch.setattr(main, "DbtReadClient", lambda **kw: fake)
 
@@ -697,4 +711,6 @@ def test_handler_a_malformed_step_drops_the_details_and_keeps_the_retry(monkeypa
     verdict = json.loads(resp[0])
     assert verdict["reason"] == "transient" and verdict["is_retryable"] is True
     assert "failure_details" not in verdict
-    assert "alert_fields=unavailable" in capsys.readouterr().out
+    logged = capsys.readouterr().out
+    assert "alert_fields=unavailable" in logged
+    assert "jane@example.org" not in logged
