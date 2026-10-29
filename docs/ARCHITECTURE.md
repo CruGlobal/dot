@@ -144,6 +144,12 @@ Pub/Sub topic: hightouch-completed
 
 **Note:** The dbt-webhook CF publishes ALL successful completions to `dbt-job-completed`. The hightouch-workflow looks the job_id up in its `dbt_job_to_hightouch` config map (a `local` in `cru-terraform/.../dot/prod/workflow.tf`, injected via `jsonencode`) and exits for jobs not in the map. **Adding a new "dbt job → Hightouch → webhook" chain is a config change, not workflow code:** add one map entry (`{ chain, sequence_id, webhook_secret_name }`) — reusing an existing webhook secret needs nothing more; a new webhook target also needs its Secret Manager secret + an accessor grant for the webhook-notify SA. The `webhook-notify-workflow` calls whatever secret the payload's `webhook_secret_name` names, so it is generic across chains (not MPDX-specific). Logs and the completion payload carry a `chain` label (the pipeline name), which replaced the earlier `environment` field — ambiguous once a chain's dbt environment (e.g. beta-prod) differed from its downstream target (stage).
 
+**Where a sync's data comes from:** the map only says *when* a sequence runs. *What* it reads is set by the Hightouch SQL models and syncs, which are kept in [CruGlobal/hightouch-reverse-etl](https://github.com/CruGlobal/hightouch-reverse-etl) (`models/` and `syncs/`, one file per target, e.g. `*-prod.yaml` and `*-stage.yaml`). Each model's `rawSql` names the BigQuery project and dataset it selects from; neither this repo nor cru-terraform does. Check there before assuming a target's source — a "stage" target can read `cru-data-warehouse-beta-prod` rather than `stage-2` when the downstream team wants prod data in their stage system. To read one without cloning:
+
+```bash
+gh api repos/CruGlobal/hightouch-reverse-etl/contents/models/<file>.yaml --jq .content | base64 -d
+```
+
 ### dbt → outside HTTPS endpoint (Pub/Sub push, no workflow)
 
 Use this when an outside system only needs to know that a dbt job succeeded. When something has to run between the build and the call, like the Hightouch sync above, use a workflow: it starts that step, waits for it to finish, and then notifies.
