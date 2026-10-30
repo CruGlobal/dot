@@ -144,6 +144,13 @@ Pub/Sub topic: hightouch-completed
 
 **Note:** The dbt-webhook CF publishes ALL successful completions to `dbt-job-completed`. The hightouch-workflow looks the job_id up in its `dbt_job_to_hightouch` config map (a `local` in `cru-terraform/.../dot/prod/workflow.tf`, injected via `jsonencode`) and exits for jobs not in the map. **Adding a new "dbt job → Hightouch → webhook" chain is a config change, not workflow code:** add one map entry (`{ chain, sequence_id, webhook_secret_name }`) — reusing an existing webhook secret needs nothing more; a new webhook target also needs its Secret Manager secret + an accessor grant for the webhook-notify SA. The `webhook-notify-workflow` calls whatever secret the payload's `webhook_secret_name` names, so it is generic across chains (not MPDX-specific). Logs and the completion payload carry a `chain` label (the pipeline name), which replaced the earlier `environment` field — ambiguous once a chain's dbt environment (e.g. beta-prod) differed from its downstream target (stage).
 
+**Where a sync's data comes from:** the map picks a sequence, not the syncs in it. Which syncs a sequence runs is set in the Hightouch UI. Which tables they read is kept in [CruGlobal/hightouch-reverse-etl](https://github.com/CruGlobal/hightouch-reverse-etl), not in this repo or cru-terraform, so read the sync's Hightouch model rather than guessing from its name. Find an MPDX sync file (`syncs/*.yaml`) by its `destination:` and `config.object`; prod and stage syncs can write the same object. Its `model:` value is a `models/` filename without `.yaml` (not the model's `name:`), and that model's `rawSql` names the BigQuery table(s) it reads. A sync's `schedule.type` shows whether it runs on its own: `cron` and `interval` syncs do unless `schedulePaused` is true, and a `manual` sync runs only when something triggers it. `schedulePaused` stops only the sync's own schedule: a paused sync still runs when a sequence that includes it runs, or when it is started by hand or through the API ([Hightouch docs](https://hightouch.com/docs/syncs/schedule-sync-ui)). To read a file without cloning:
+
+```bash
+gh api repos/CruGlobal/hightouch-reverse-etl/contents/syncs/<file>.yaml --jq .content | base64 -d
+gh api repos/CruGlobal/hightouch-reverse-etl/contents/models/<file>.yaml --jq .content | base64 -d
+```
+
 ### dbt → outside HTTPS endpoint (Pub/Sub push, no workflow)
 
 Use this when an outside system only needs to know that a dbt job succeeded. When something has to run between the build and the call, like the Hightouch sync above, use a workflow: it starts that step, waits for it to finish, and then notifies.
