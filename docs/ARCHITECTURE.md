@@ -79,7 +79,7 @@ dbt Cloud job fails (status_code=20)
   → POST to dbt-webhook Cloud Function
     → verify signature, parse payload
     → detect failure status (status_code=20 or run_status="Error")
-    → publish to Pub/Sub topic: dbt-retry-events (job_id, run_id, job_name, account_id)
+    → publish to Pub/Sub topic: dbt-retry-events (job_id, run_id, job_name, account_id, environment_id)
     → return 200 immediately
 
 Pub/Sub topic: dbt-retry-events
@@ -93,9 +93,9 @@ Pub/Sub topic: dbt-retry-events
           { reason, is_retryable, prior_is_retry, failed_count, run_created_at,
             run_href, job_name, failed_step, failure_details, … }
     → branch on the verdict:
-        · prior_is_retry              → DBT_JOB_RETRY_EXHAUSTED, stop
-        · reason metadata_unavailable → DBT_JOB_RETRY_GUARD_UNCERTAIN, stop (fail-closed)
-        · not is_retryable            → DBT_JOB_NOT_RETRYABLE, stop
+        · prior_is_retry              → DBT_JOB_RETRY_EXHAUSTED, post to Slack, stop
+        · reason metadata_unavailable → DBT_JOB_RETRY_GUARD_UNCERTAIN, post to Slack, stop (fail-closed)
+        · not is_retryable            → DBT_JOB_NOT_RETRYABLE, post to Slack, stop
         · is_retryable                → wait 5 min (base_delay_seconds)
                                        → dedup: skip (superseded) if a newer run exists
                                        → POST to dbt-trigger with
@@ -114,8 +114,36 @@ Pub/Sub topic: dbt-retry-events
 - **What failed, for a human** — `dbt-classify` also returns the run and job links, the job name, the failed step, and up to five failures with their messages (from `run_results.json`, or from `sources.json` for a failed freshness step), plus dbt's error summary from the step log when none of them says why, so an alert can say what broke without opening dbt Cloud. This lives in `dbt-classify/failure_details.py`, apart from the classifier, and never affects the retry decision: it reads nothing the classifier does not already fetch except `sources.json`, no field can replace a classifier field, and if it fails (including a field that cannot be sent as JSON) the verdict is returned without it. The text fields are Slack-escaped and are for posting, not logging: they are dbt and BigQuery error output, which can quote a data value. The function's log line carries only counts of them, or `alert_fields=unavailable` when they could not be built.
 - **Classification is unit-tested** — the logic lives in `dbt-classify/classifier.py` with a unit-test suite (`main_test.py`), covering each rule (transient match, test-failure, unknown error, mixed, no-results, uncovered-step, loop guard, fail-closed). It used to be untestable Cloud Workflows YAML.
 - **5-minute delay** — gives transient issues (network, API rate limits) time to clear without delaying escalation much.
-- **Alerting** — `DBT_JOB_NOT_RETRYABLE`, `DBT_JOB_RETRY_EXHAUSTED`, and `DBT_JOB_RETRY_GUARD_UNCERTAIN` are emitted as ERROR-severity logs and surfaced by a Datadog monitor, so failures the workflow will not auto-fix escalate to a human.
+- **Alerting** — a failure the workflow does not retry is posted to Slack (see [Failure alerts in Slack](#failure-alerts-in-slack)). `DBT_JOB_NOT_RETRYABLE`, `DBT_JOB_RETRY_EXHAUSTED`, and `DBT_JOB_RETRY_GUARD_UNCERTAIN` are also written as ERROR-severity logs. The Datadog log-metric monitor built on those logs (cru-terraform `dot/monitors.tf`) has never counted one, so it is not an alert path.
 - **Service account + logging** — the workflow runs as the dbt-trigger service account, which has dbt-job trigger and DBT_TOKEN secret access **and** `roles/logging.logWriter`. The logWriter grant is required because a Cloud Workflow's `sys.log` calls the Logging API as the workflow's own service account; without it the workflow fails on its first log step.
+
+#### Failure alerts in Slack
+
+The workflow posts each failure it does not retry to the Slack channel for the run's dbt environment. A run it retries is not posted; if the retry fails too, that failure is posted as "failed again after auto-retry". Each channel has its own Slack app with one incoming webhook, and the app name is the sender people see:
+
+| dbt environment (id) | Channel | Slack app | Secret holding the webhook URL |
+|---|---|---|---|
+| Prod (17055) | #dse_alerts | DSE dbt Alerts | `dbt-retry-workflow_SLACK_URL_DSE_ALERTS` |
+| Stage (33997), Beta Prod (317597), Beta Stage (336977), Beta Stage - ERT Family Life Branch (383356) | #dse_alerts_stage | DSE dbt Stage and Beta Alerts | `dbt-retry-workflow_SLACK_URL_DSE_ALERTS_STAGE` |
+
+Continuous Integration (35163) and Beta Prod API (330860) never post. Other teams' environments share the dbt account and are skipped; a missing environment in the DSE project (16814) logs a WARNING instead. The routing lives in `dbt_failure_alert_routes` in cru-terraform `dot/prod/workflow.tf`, so a new DSE environment gets its channel there.
+
+**What still comes from dbt Cloud:** cancelled runs never reach this workflow (dbt-webhook sends only failures to `dbt-retry-events`), so dbt Cloud notification 2314 still posts cancels to #dse_alerts. Its failure list is empty, and notification 19931 (#dse_alerts_stage) has no jobs. The other dbt Cloud notifications (the US Donations consumer channels, success channels, and email lists) are separate and unchanged.
+
+**If a post fails:** the workflow logs `DBT_ALERT_SLACK_POST_FAILED` and the execution ends FAILED. The Datadog monitor "dbt Retry Workflow Execution Failed" (cru-terraform `dot/prod/datadog.tf`) then posts to #dse_alerts through Datadog's own Slack app, so a broken webhook still shows up. The Datadog app must stay a member of #dse_alerts for that post to arrive. An archived channel or a Slack outage stops both, and then only dbt Cloud's run history shows the failure.
+
+**Who manages the apps:** Phyllis Helton, Chad Kline and Tony Guan are collaborators on both apps at https://api.slack.com/apps. Any collaborator can see the webhook URLs on the app's **Incoming Webhooks** page, which is the only place they are kept (not 1Password). Keep at least two collaborators: if every collaborator on an internal app is deactivated, Slack may deactivate the app, and only a Slack owner can bring it back.
+
+**Replacing a webhook URL** (for example, after one is exposed):
+
+1. In the app, **Incoming Webhooks → Add New Webhook to Workspace**, and pick the same channel.
+2. Add the new URL as a secret version. Members of `dps-gcp-role-data-engineers@cru.org` can add versions but not read them:
+   ```bash
+   gcloud secrets versions add dbt-retry-workflow_SLACK_URL_DSE_ALERTS --project=cru-data-orchestration-prod --data-file=-
+   ```
+   Paste the URL, press Enter, then Ctrl-D, so the URL stays out of your shell history. The workflow strips the newline. It only posts to a `https://hooks.slack.com/services/...` URL in Cru's Slack workspace; anything else fails the execution.
+3. Nothing needs redeploying: the workflow reads the `latest` version each time it posts.
+4. Remove the old webhook from the app's **Incoming Webhooks** page, then disable the old secret version (`gcloud secrets versions disable <version> --secret=<secret> --project=cru-data-orchestration-prod`).
 
 ### dbt → Hightouch → MPDX (Webhook → Pub/Sub → Hightouch API → Webhook)
 
@@ -397,7 +425,7 @@ A persistent fail-open alerts through the Datadog monitor "DSE dbt trigger gate 
 | `dbt-job-completed` | dbt-webhook (on success) | hightouch-workflow; one push subscription per entry in `dbt_job_completed_push_consumers` | Generic fan-out for all post-dbt orchestration and hand-offs |
 | `fabric-job-events` | dbt-webhook (on success, legacy for job 163545) | fabric-job-workflow | Run the Fabric Notebook (jobType `RunNotebook`) after the US Donations dbt job succeeds |
 | `hightouch-completed` | hightouch-workflow | webhook-notify-workflow | Call the downstream webhook (named by the payload's `webhook_secret_name`) after a Hightouch sync completes |
-| `dbt-retry-events` | dbt-webhook (on failure) | dbt-retry-workflow | Retry transient dbt Cloud job failures |
+| `dbt-retry-events` | dbt-webhook (on failure) | dbt-retry-workflow | Retry transient dbt Cloud job failures and post the rest to Slack |
 
 ## Webhook Authentication
 
@@ -451,8 +479,10 @@ All secrets are stored in GCP Secret Manager in project `cru-data-orchestration-
 | `fabric-workflow_AZURE_CLIENT_ID` | Azure service principal client ID for Fabric API | Secret Manager only |
 | `fabric-workflow_AZURE_CLIENT_SECRET` | Azure service principal client secret for Fabric API | Secret Manager only |
 | `fabric-workflow_AZURE_TENANT_ID` | Azure tenant ID for Fabric API | Secret Manager only |
+| `dbt-retry-workflow_SLACK_URL_DSE_ALERTS` | Incoming-webhook URL that posts prod dbt failure alerts to #dse_alerts | Not in 1Password: the "DSE dbt Alerts" Slack app (see [Failure alerts in Slack](#failure-alerts-in-slack)) |
+| `dbt-retry-workflow_SLACK_URL_DSE_ALERTS_STAGE` | Incoming-webhook URL that posts stage and beta dbt failure alerts to #dse_alerts_stage | Not in 1Password: the "DSE dbt Stage and Beta Alerts" Slack app |
 
-**Important:** When rotating a secret, add a new version in Secret Manager, then **redeploy the Cloud Function** (push any change to the function's folder on `main`) to pick up the new value. Running instances cache the secret at startup.
+**Important:** When rotating a secret, add a new version in Secret Manager, then **redeploy the Cloud Function** (push any change to the function's folder on `main`) to pick up the new value. Running instances cache the secret at startup. The two `dbt-retry-workflow_SLACK_URL_*` secrets need no redeploy: the workflow reads the latest version each time it posts.
 
 ## Manual Trigger Runbook
 
