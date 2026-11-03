@@ -53,7 +53,7 @@ After Terraform creates the secret, add the value via the GCP Console or CLI:
   echo -n "the-actual-secret-value" | gcloud secrets versions add {secret-name} --data-file=-
   ```
 
-Devs in the `dps-gcp-role-data-engineers@cru.org` group have access to write secret values but not read them (except in POC). The [Secrets](docs/ARCHITECTURE.md#secrets) section of ARCHITECTURE records where some values are kept (such as a 1Password item), which secrets hold the same value, and which secret Terraform sets, so you never add one by hand.
+Devs in the `dps-gcp-role-data-engineers@cru.org` group have access to write secret values but not read them (except in POC). The [Secrets](docs/ARCHITECTURE.md#secrets) section of ARCHITECTURE records where some values are kept (such as a 1Password item), which secrets hold the same value, and which secret Terraform sets, so it is never added by hand.
 
 **Important:** A Cloud Function reads a new version of its secret only when a new instance starts, so redeploy the function to make it take effect (push a change under the function's folder to `main` for prod or `staging` for stage). The secrets a function reads are the `secrets` list on its module in `cru-terraform/applications/data-warehouse/dot/prod/functions.tf` (`dot/stage/functions.tf` for stage), written without the function-name prefix: `dbt-webhook_DBT_WEBHOOK_SECRET` is `DBT_WEBHOOK_SECRET` on the module whose `name` is `dbt-webhook`. The Cloud Workflows in prod and the Cloud Run jobs (their modules are in `jobs.tf`) read the newest version of each secret every time they run, so a secret that only a workflow or a job reads needs no deployment.
 
