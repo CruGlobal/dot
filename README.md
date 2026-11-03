@@ -53,9 +53,9 @@ After Terraform creates the secret, add the value via the GCP Console or CLI:
   echo -n "the-actual-secret-value" | gcloud secrets versions add {secret-name} --data-file=-
   ```
 
-Devs in the `dps-gcp-role-data-engineers@cru.org` group have access to write secret values but not read them (except in POC).
+Devs in the `dps-gcp-role-data-engineers@cru.org` group have access to write secret values but not read them (except in POC). For where some values are kept, such as a 1Password item, see the Secrets table in [ARCHITECTURE](docs/ARCHITECTURE.md#secrets).
 
-**Important:** A new version of a secret that a Cloud Function reads does not take effect until the function is redeployed (push a change under the function's folder to `main` for prod or `staging` for stage). The secrets a function reads are the `secrets` list on its module in `cru-terraform/applications/data-warehouse/dot/prod/functions.tf` (`dot/stage/functions.tf` for stage). The Cloud Workflows in prod read the newest version of each secret every time they run, so a secret that only a workflow reads needs no deployment.
+**Important:** A new version of a secret that a Cloud Function reads does not take effect until the function is redeployed (push a change under the function's folder to `main` for prod or `staging` for stage). The secrets a function reads are the `secrets` list on its module in `cru-terraform/applications/data-warehouse/dot/prod/functions.tf` (`dot/stage/functions.tf` for stage), written without the function-name prefix: `dbt-webhook_DBT_WEBHOOK_SECRET` is `DBT_WEBHOOK_SECRET` on the module named `dbt-webhook`. The Cloud Workflows in prod and the Cloud Run jobs (their modules are in `jobs.tf`) read the newest version of each secret every time they run, so a secret that only a workflow or a job reads needs no deployment.
 
 The Slack webhook URLs for dbt failure alerts are kept in two Slack apps rather than 1Password. Which secret goes to which channel, and how to replace a URL with a paste that stays out of your shell history (not the `echo` above): [Failure alerts in Slack](docs/ARCHITECTURE.md#failure-alerts-in-slack).
 
