@@ -504,7 +504,7 @@ All secrets are stored in GCP Secret Manager in project `cru-data-orchestration-
 | `dbt-retry-workflow_SLACK_URL_DSE_ALERTS` | Incoming-webhook URL that posts prod dbt failure alerts to #dse_alerts | Not in 1Password: the "DSE dbt Alerts" Slack app (see [Failure alerts in Slack](#failure-alerts-in-slack)) |
 | `dbt-retry-workflow_SLACK_URL_DSE_ALERTS_STAGE` | Incoming-webhook URL that posts stage and beta dbt failure alerts to #dse_alerts_stage | Not in 1Password: the "DSE dbt Stage and Beta Alerts" Slack app |
 
-**Important:** When rotating a secret that a Cloud Function reads, add a new version in Secret Manager, then **redeploy the Cloud Function** (push any change to the function's folder on `main`) to pick up the new value. Running instances cache the secret at startup. The secrets a function reads are the `secrets` list on its module in `cru-terraform/applications/data-warehouse/dot/prod/functions.tf`, written without the function-name prefix (`DBT_WEBHOOK_SECRET` on the module named `dbt-webhook`); in this table, that is only `dbt-webhook_DBT_WEBHOOK_SECRET`. `dbt-trigger_DBT_TOKEN` and `dbt-classify_DBT_TOKEN` hold the same dbt service token, so a new token goes into both and both functions are redeployed. A secret that only a Cloud Workflow reads (every other row here) is read at `latest` on each run, so a new version needs no redeploy.
+**Important:** When rotating a secret that a Cloud Function reads, add a new version in Secret Manager, then **redeploy the Cloud Function** (push any change to the function's folder on `main`) to pick up the new value. Running instances cache the secret at startup. The secrets a function reads are the `secrets` list on its module in `cru-terraform/applications/data-warehouse/dot/prod/functions.tf`, written without the function-name prefix (`DBT_WEBHOOK_SECRET` on the module whose `name` is `dbt-webhook`); in this table, that is only `dbt-webhook_DBT_WEBHOOK_SECRET`. `dbt-trigger_DBT_TOKEN` and `dbt-classify_DBT_TOKEN` hold the same dbt service token: add a new token to both and redeploy both functions. A secret that only a Cloud Workflow (every other row here) or a Cloud Run job (`jobs.tf`) reads is read at `latest` on each run, so a new version needs no redeploy.
 
 ## Manual Trigger Runbook
 
@@ -575,7 +575,7 @@ Replace `<DBT_WEBHOOK_SECRET>` with the signing key from 1Password.
 
 ### After Secret Rotation
 
-When you update a secret that a Cloud Function reads, its running instances still hold the old value in memory. (A secret that only a Cloud Workflow reads needs nothing; see [Secrets](#secrets).) To pick up the new secret:
+When you update a secret that a Cloud Function reads, its running instances still hold the old value in memory. (A secret that only a Cloud Workflow or a Cloud Run job reads needs nothing; see [Secrets](#secrets).) To pick up the new secret:
 
 1. Push any change to the function's folder on `main` in the dot repo (triggers GHA auto-deploy)
 2. Or ask someone with `run.services.update` permission to restart the Cloud Run service
