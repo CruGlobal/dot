@@ -57,7 +57,7 @@ Devs in the `dps-gcp-role-data-engineers@cru.org` group have access to write sec
 
 **Important:** Creating a new secret version does not automatically take effect. You'll need to trigger a new deployment (push to `main` for prod, `staging` for stage).
 
-The Slack webhook URLs for dbt failure alerts are the exception: the workflow reads them on every post, and they are kept in two Slack apps rather than 1Password. Which secret goes to which channel, and how to replace a URL: [Failure alerts in Slack](docs/ARCHITECTURE.md#failure-alerts-in-slack).
+The Slack webhook URLs for dbt failure alerts need no deployment, because the workflow reads them on every post, and they are kept in two Slack apps rather than 1Password. Which secret goes to which channel, and how to replace a URL with a paste that stays out of your shell history (not the `echo` above): [Failure alerts in Slack](docs/ARCHITECTURE.md#failure-alerts-in-slack).
 
 ## Automated deploys (prod & stage)
 
