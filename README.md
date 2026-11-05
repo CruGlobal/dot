@@ -55,7 +55,7 @@ After Terraform creates the secret, add the value via the GCP Console or CLI:
 
 Devs in the `dps-gcp-role-data-engineers@cru.org` group have access to write secret values but not read them (except in POC). The [Secrets](docs/ARCHITECTURE.md#secrets) section of ARCHITECTURE says which secrets need a function redeploy and how to run one without a commit, where some values are kept (such as a 1Password item), which secrets hold the same value, and which secret Terraform sets, so it is never added by hand.
 
-**Important:** A new version of a secret that a Cloud Function reads takes effect only after the function is redeployed (from `main` for prod, `staging` for stage). A secret that only a Cloud Workflow or a Cloud Run job reads needs no redeploy.
+**Important:** A Cloud Function's instances pick up a new version of its secret only as they start, so redeploy the function (from `main` for prod, `staging` for stage) to move every instance to it. A secret that only a Cloud Workflow or a Cloud Run job reads needs no redeploy.
 
 The Slack webhook URLs for dbt failure alerts are kept in two Slack apps rather than 1Password. Which secret goes to which channel, and how to replace a URL with a paste that stays out of your shell history (not the `echo` above): [Failure alerts in Slack](docs/ARCHITECTURE.md#failure-alerts-in-slack).
 
