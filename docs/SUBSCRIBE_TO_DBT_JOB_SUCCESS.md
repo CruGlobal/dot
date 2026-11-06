@@ -1,6 +1,6 @@
 # Subscribe to dbt job success
 
-For a team whose app should start work when the data team's dbt build finishes, such as a sync that
+For a US Tech team whose app should start work when the data team's dbt build finishes, such as a sync that
 reads a table the build writes. You add one Pub/Sub subscription in your own GCP project through
 cru-terraform. Nothing changes on the data team's side, and you own the subscription, how it
 delivers, and its alerts.
@@ -25,8 +25,8 @@ versioned, so a breaking change comes as a new version next to the one you use i
 it under you. And no other app reads that dataset. Together, that puts your team in complete control
 of any change to the data your app depends on.
 
-If your app doesn't have an `ext_` dataset yet, ask the data team (dps-dse@cru.org) for one. Ask them
-for read access to it too, naming the service account your job runs as.
+If your app doesn't have an `ext_` dataset yet, please create one in dse-dbt, built by its own dbt
+job. Then request read access for your job's service account through datahelp@cru.org.
 
 ## 2. Find the job id
 
@@ -36,7 +36,7 @@ for read access to it too, naming the service account your job runs as.
    for `DBT_SYSTEM_TO_BUILD: <that system>`. Pick the prod job: the one that uses `*prod`, usually
    named `<system>_prod`. Its `linked_id` is the dbt job id.
 
-If more than one prod job matches, or you can't open `jobs.yml`, ask the data team.
+If more than one prod job matches, or you can't open `jobs.yml`, ask through datahelp@cru.org.
 
 ## 3. Add the subscription
 
@@ -147,7 +147,7 @@ points at all, and without that setting the monitor never alerts. The data team'
 ## If the topic changes
 
 Before renaming the topic or changing the message, the data team checks the topic's subscriptions
-and tells the teams that own them. You don't need to sign up, but telling the data team which jobs
+and tells the teams that own them. You don't need to sign up, but telling the data team (datahelp@cru.org) which jobs
 you listen to means they can warn you when a job is rebuilt and gets a new id.
 
 An endpoint that can't own a subscription (for example, one outside GCP) can ask the data team for
