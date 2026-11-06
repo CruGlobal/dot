@@ -38,7 +38,7 @@ Secrets are managed in two steps:
 
 **Step 1: Create the secret resource (Terraform)**
 
-Secret resources are created in [cru-terraform](https://github.com/CruGlobal/cru-terraform/tree/master/applications/data-warehouse/dot) — each function or workflow defines its secrets in its Terraform module. The naming convention is `{function-or-workflow-name}_{ENV_VAR_NAME}` (e.g., `dbt-trigger_DBT_TOKEN`, `hightouch-workflow_HT_KEY`).
+Secret resources are created in [cru-terraform](https://github.com/CruGlobal/cru-terraform/tree/master/applications/data-warehouse/dot) — each function or workflow defines its secrets in its Terraform module. The naming convention is `{function-or-workflow-name}_{ENV_VAR_NAME}` (e.g., `dbt-trigger_DBT_TOKEN`, `hightouch-workflow_API_KEY`).
 
 Terraform creates the empty secret resource — it does NOT contain the actual value.
 
@@ -53,9 +53,11 @@ After Terraform creates the secret, add the value via the GCP Console or CLI:
   echo -n "the-actual-secret-value" | gcloud secrets versions add {secret-name} --data-file=-
   ```
 
-Devs in the `dps-gcp-role-data-engineers@cru.org` group have access to write secret values but not read them (except in POC).
+Devs in the `dps-gcp-role-data-engineers@cru.org` group have access to write secret values but not read them (except in POC). The [Secrets](docs/ARCHITECTURE.md#secrets) section of ARCHITECTURE says which secrets need a function redeploy and how to run one without a commit, where some values are kept (such as a 1Password item), which secrets hold the same value, and which secret Terraform sets, so it is never added by hand.
 
-**Important:** Creating a new secret version does not automatically take effect. You'll need to trigger a new deployment (push to `main` for prod, `staging` for stage).
+**Important:** A Cloud Function's instances pick up a new version of its secret only as they start, so redeploy the function (from `main` for prod, `staging` for stage) to move every instance to it. A secret that only a Cloud Workflow or a Cloud Run job reads needs no redeploy.
+
+The Slack webhook URLs for dbt failure alerts are kept in two Slack apps rather than 1Password. Which secret goes to which channel, and how to replace a URL with a paste that stays out of your shell history (not the `echo` above): [Failure alerts in Slack](docs/ARCHITECTURE.md#failure-alerts-in-slack).
 
 ## Automated deploys (prod & stage)
 
