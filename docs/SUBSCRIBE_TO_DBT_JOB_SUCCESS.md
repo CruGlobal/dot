@@ -1,8 +1,9 @@
 # Subscribe to dbt job success
 
 For a team whose app should start work when the data team's dbt build finishes, such as a sync that
-reads a table the build writes. You add one Pub/Sub subscription in your own GCP project. Nothing
-changes on the data team's side, and you own the subscription, how it delivers, and its alerts.
+reads a table the build writes. You add one Pub/Sub subscription in your own GCP project through
+cru-terraform. Nothing changes on the data team's side, and you own the subscription, how it
+delivers, and its alerts.
 
 ## How it works
 
@@ -25,12 +26,17 @@ projects/cru-data-orchestration-prod/topics/dbt-job-completed
    for `DBT_SYSTEM_TO_BUILD: <that system>`. Pick the prod job: the one that uses `*prod`, usually
    named `<system>_prod`. Its `linked_id` is the dbt job id.
 
-If more than one prod job matches, or you can't open that repo, ask the data team
-(dps-dse@cru.org).
+Ask the data team (dps-dse@cru.org) instead if you can't see the table's labels or open
+`jobs.yml`, the table has no `dbt_system_to_build` label, more than one prod job matches, or the
+job hasn't run lately.
 
 ## 2. Add the subscription
 
-One subscription per dbt job, in your own project. A Cloud Run push target looks like this:
+One subscription per dbt job, in your own project. Add it through cru-terraform: Atlantis already
+has the rights to attach a subscription to this topic. If you create it any other way (console,
+`gcloud`, another pipeline), ask the data team first for `roles/pubsub.subscriber` on the topic.
+
+A Cloud Run push target looks like this:
 
 ```hcl
 resource "google_pubsub_subscription" "dbt_job_completed" {
@@ -64,10 +70,14 @@ resource "google_pubsub_subscription" "dbt_job_completed" {
 }
 ```
 
-A working example, with its alert, is the `workvivo-sync` app in cru-terraform:
-`applications/workvivo-sync/prod/build-trigger.tf` and `datadog.tf` next to it. For a Cloud Run
-service, the push service account needs `roles/run.invoker` on the service, and Pub/Sub in your
-project must be able to sign tokens as that account (`failure-route.tf` in the same folder grants it).
+A working example is the `workvivo-sync` app in cru-terraform, `applications/workvivo-sync/prod/`:
+
+- `build-trigger.tf`: the subscription.
+- `cloudrun.tf`: the push service account (`invoker_service_accounts`) and its `roles/run.invoker`
+  on the service (`invokers`).
+- `failure-route.tf`: lets Pub/Sub in that project sign tokens as the push service account
+  (`roles/iam.serviceAccountTokenCreator` for the Pub/Sub service agent).
+- `datadog.tf`: the alert.
 
 - **The filter can't be edited.** Changing it replaces the subscription, and any message waiting at
   that moment is lost. For a second dbt job, add a second subscription.
@@ -98,7 +108,7 @@ Its data is this JSON:
 - With `no_wrapper`, the POST body is that JSON. Without it, the body is the standard Pub/Sub
   envelope: the JSON is base64 in `message.data`, and the attributes are in `message.attributes`.
 - Ids are strings of digits. `run_status_code` is a number. `run_status_humanized` is dbt's free
-  text and can be the string `"None"`, so don't rely on it.
+  text and is often empty, so don't rely on it.
 - `run_id` goes up with each new run, in big jumps, never by 1. That is what we've seen; dbt doesn't
   promise it.
 
@@ -110,6 +120,8 @@ Its data is this JSON:
 - **Expect repeats and out of order delivery.** A repeat carries the same `run_id`. Make a repeat
   harmless, for example by skipping when your job is already running, or by skipping any `run_id`
   at or below the highest one you've handled.
+- **A `run_id` of `"0"` is a hand-made test** from the data team, not a build. To send you a real
+  one again, the data team re-runs the dbt job.
 - **Keep secrets out of the push URL.** It shows up in Terraform plans.
 
 ## 5. Alerts
@@ -119,6 +131,10 @@ waiting too long: `gcp.pubsub.subscription.oldest_unacked_message_age` for your 
 the workvivo-sync example. That alert can't tell you when the dbt job stops succeeding, since then
 nothing is sent. If that matters, also alert when your subscription has accepted no push for longer
 than the job's normal gap (`gcp.pubsub.subscription.push_request_count` with `response_class:ack`).
+Set `on_missing_data = "default"` on that monitor: with no accepted push, the metric reports no
+points at all, and without that setting the monitor never alerts. The data team's
+`dbt_job_completed_push_missing` monitor in cru-terraform
+`applications/data-warehouse/dot/prod/datadog.tf` is an example.
 
 ## 6. Reading the data
 
