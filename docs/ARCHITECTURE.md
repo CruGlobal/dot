@@ -203,6 +203,8 @@ gh api repos/CruGlobal/hightouch-reverse-etl/contents/models/<file>.yaml --jq .c
 
 ### dbt → outside HTTPS endpoint (Pub/Sub push, no workflow)
 
+A team with its own GCP project usually subscribes to `dbt-job-completed` directly instead: see [Subscribe to dbt job success](SUBSCRIBE_TO_DBT_JOB_SUCCESS.md). The push list below is for an endpoint that can't own a subscription.
+
 Use this when an outside system only needs to know that a dbt job succeeded. When something has to run between the build and the call, like the Hightouch sync above, use a workflow: it starts that step, waits for it to finish, and then notifies.
 
 ```
@@ -444,7 +446,7 @@ A persistent fail-open alerts through the Datadog monitor "DSE dbt trigger gate 
 |-------|-----------|-------------------|---------|
 | `cloud-run-job-completed` | okta-sync, woo-sync, process-geography | cloud-run-job-dbt | Trigger dbt job after CloudRun job completes |
 | `fivetran-events` | fivetran-webhook | fivetran-dbt | Trigger dbt job after Fivetran sync completes |
-| `dbt-job-completed` | dbt-webhook (on success) | hightouch-workflow; one push subscription per entry in `dbt_job_completed_push_consumers` | Generic fan-out for all post-dbt orchestration and hand-offs |
+| `dbt-job-completed` | dbt-webhook (on success) | hightouch-workflow; one push subscription per entry in `dbt_job_completed_push_consumers`; other teams' own subscriptions ([guide](SUBSCRIBE_TO_DBT_JOB_SUCCESS.md)) | Generic fan-out for all post-dbt orchestration and hand-offs |
 | `fabric-job-events` | dbt-webhook (on success, legacy for job 163545) | fabric-job-workflow | Run the Fabric Notebook (jobType `RunNotebook`) after the US Donations dbt job succeeds |
 | `hightouch-completed` | hightouch-workflow | webhook-notify-workflow | Call the downstream webhook (named by the payload's `webhook_secret_name`) after a Hightouch sync completes |
 | `dbt-retry-events` | dbt-webhook (on failure) | dbt-retry-workflow | Retry transient dbt Cloud job failures and post the rest to Slack |
