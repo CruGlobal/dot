@@ -18,23 +18,31 @@ projects/cru-data-orchestration-prod/topics/dbt-job-completed
 - Only successful runs are published. A failed or cancelled run sends nothing. When DOT's automatic
   retry reruns a failed job and the rerun succeeds, that rerun is published with its own run id.
 
-## 1. Find the job id
+## 1. Read from your own `ext_` dataset
 
-1. In the BigQuery console, open the table your app reads and look at **Details → Labels**. The
-   `dbt_system_to_build` label names the system whose dbt job builds that table.
+Subscribe only to the dbt job that builds an `ext_` dataset made for your app. Its tables are
+versioned, so a breaking change comes as a new version next to the one you use instead of changing
+it under you. And no other app reads that dataset. Together, that puts your team in complete control
+of any change to the data your app depends on.
+
+If your app doesn't have an `ext_` dataset yet, ask the data team (dps-dse@cru.org) for one. Ask them
+for read access to it too, naming the service account your job runs as.
+
+## 2. Find the job id
+
+1. In the BigQuery console, open a table in your `ext_` dataset and look at **Details → Labels**.
+   The `dbt_system_to_build` label names the system whose dbt job builds it.
 2. In [`jobs.yml`](https://github.com/CruGlobal/dse-dbt-jobs-as-code/blob/master/jobs.yml), search
    for `DBT_SYSTEM_TO_BUILD: <that system>`. Pick the prod job: the one that uses `*prod`, usually
    named `<system>_prod`. Its `linked_id` is the dbt job id.
 
-Ask the data team (dps-dse@cru.org) instead if you can't see the table's labels or open
-`jobs.yml`, the table has no `dbt_system_to_build` label, more than one prod job matches, or the
-job hasn't run lately.
+If more than one prod job matches, or you can't open `jobs.yml`, ask the data team.
 
-## 2. Add the subscription
+## 3. Add the subscription
 
-One subscription per dbt job, in your own project. Add it through cru-terraform: Atlantis already
-has the rights to attach a subscription to this topic. If you create it any other way (console,
-`gcloud`, another pipeline), ask the data team first for `roles/pubsub.subscriber` on the topic.
+One subscription per dbt job, in your own project, added through cru-terraform. Atlantis already
+has the rights to attach a subscription to this topic, so the data team doesn't need to grant
+anything.
 
 A Cloud Run push target looks like this:
 
@@ -85,7 +93,7 @@ A working example is the `workvivo-sync` app in cru-terraform, `applications/wor
 - **Messages wait up to 7 days** (the default retention) and are retried with backoff until your
   endpoint accepts them.
 
-## 3. What you receive
+## 4. What you receive
 
 Each message has three attributes, all strings: `job_id`, `run_status` and `environment_id`.
 
@@ -112,7 +120,7 @@ Its data is this JSON:
 - `run_id` goes up with each new run, in big jumps, never by 1. That is what we've seen; dbt doesn't
   promise it.
 
-## 4. Rules for your endpoint
+## 5. Rules for your endpoint
 
 - **Answer fast, to every message.** Return 102, 200, 201, 202 or 204 within the ack deadline (60
   seconds above), including for messages you decide to skip. Anything else, or no answer in time,
@@ -124,7 +132,7 @@ Its data is this JSON:
   one again, the data team re-runs the dbt job.
 - **Keep secrets out of the push URL.** It shows up in Terraform plans.
 
-## 5. Alerts
+## 6. Alerts
 
 The data team doesn't watch your subscription, so add your own alert. The usual one is a message
 waiting too long: `gcp.pubsub.subscription.oldest_unacked_message_age` for your subscription, as in
@@ -135,11 +143,6 @@ Set `on_missing_data = "default"` on that monitor: with no accepted push, the me
 points at all, and without that setting the monitor never alerts. The data team's
 `dbt_job_completed_push_missing` monitor in cru-terraform
 `applications/data-warehouse/dot/prod/datadog.tf` is an example.
-
-## 6. Reading the data
-
-Getting told the build finished doesn't grant access to the table. Ask the data team
-(dps-dse@cru.org) for read access to the dataset, naming the service account your job runs as.
 
 ## If the topic changes
 
