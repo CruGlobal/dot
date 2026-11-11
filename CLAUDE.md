@@ -75,7 +75,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the push-not-poll pattern, 
 |-----------|---------|
 | `dbt-classify/` | Classifies a failed dbt Cloud run as transient (retryable) or not, for the dbt-retry-workflow. Reads run metadata + `run_results.json` (kept out of the Cloud Workflow, which can't hold the large artifact in a variable). Also returns what failed (run and job links, failed step, up to 5 failures with messages) for a failure alert, reading `sources.json` when a freshness step failed the run. |
 | `dbt-trigger/` | Triggers dbt Cloud jobs via API. Accepts optional `cause` for tracking. |
-| `dbt-webhook/` | Receives dbt Cloud webhooks. Routes success → Fabric, failure → retry. |
+| `dbt-webhook/` | Receives dbt Cloud webhooks. Publishes every success to `dbt-job-completed` (plus `fabric-job-events` for mapped jobs) and every error to `dbt-retry-events`. |
 | `fivetran-trigger/` | Triggers Fivetran sync jobs |
 | `fivetran-webhook/` | Receives Fivetran webhook callbacks |
 | `gcp-iam-sync/` | Cloud Run job. Nightly export of IAM bindings on the configured projects and their BigQuery datasets and tables into `el_gcp_iam` (dse-dbt `raw_gcp_iam_*`). A level with any unreadable object is not written and the run fails. |
@@ -118,6 +118,6 @@ Key files in cru-terraform:
 - `functions.tf` — Cloud Function definitions, schedules, secrets
 - `workflow.tf` — Cloud Workflow definitions
 - `event-triggers.tf` — Eventarc triggers (Pub/Sub → Workflow)
-- `dbt-job-completed-push.tf`: Pub/Sub push subscriptions that tell outside systems a dbt job succeeded
+- `dbt-job-completed-push.tf`: the push list, for outside endpoints that can't own a subscription. A team with its own GCP project subscribes itself (`docs/SUBSCRIBE_TO_DBT_JOB_SUCCESS.md`)
 - `permissions.tf` — IAM bindings for service accounts
 - `*.yaml` — Workflow YAML files (referenced by `workflow.tf` via `templatefile()`)

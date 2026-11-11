@@ -203,9 +203,9 @@ gh api repos/CruGlobal/hightouch-reverse-etl/contents/models/<file>.yaml --jq .c
 
 ### dbt → outside HTTPS endpoint (Pub/Sub push, no workflow)
 
-A team with its own GCP project usually subscribes to `dbt-job-completed` directly instead: see [Subscribe to dbt job success](SUBSCRIBE_TO_DBT_JOB_SUCCESS.md). The push list below is for an endpoint that can't own a subscription.
+Use a push when an outside system only needs to know that a dbt job succeeded. When something has to run between the build and the call, like the Hightouch sync above, use a workflow: it starts that step, waits for it to finish, and then notifies.
 
-Use this when an outside system only needs to know that a dbt job succeeded. When something has to run between the build and the call, like the Hightouch sync above, use a workflow: it starts that step, waits for it to finish, and then notifies.
+A team with its own GCP project subscribes to `dbt-job-completed` itself: see [Subscribe to dbt job success](SUBSCRIBE_TO_DBT_JOB_SUCCESS.md). The push list below is for an endpoint that can't own a subscription.
 
 ```
 dbt Cloud job completes successfully
@@ -221,8 +221,8 @@ Pub/Sub topic: dbt-job-completed
 Adding a consumer is one entry in `dbt_job_completed_push_consumers` (`cru-terraform/.../dot/prod/dbt-job-completed-push.tf`): `dbt_job_ids`, `push_endpoint`, `audience` and `alert_after_hours`. It needs no workflow, topic or code change. The consumer's endpoint must:
 
 - check the token's signature, its `email` (`dbt-job-completed-push@cru-data-orchestration-prod.iam.gserviceaccount.com`) and its `aud` (the consumer's own audience);
-- answer 102, 200, 201, 202 or 204 within 60 seconds to every push, including pushes it decides to skip, and do slow work after answering. Any other answer is a failure, and Pub/Sub sends the message again;
-- expect repeats and out-of-order delivery: keep the highest `run_id` handled and skip anything not newer;
+- answer 102, 200, 201, 202 or 204 within 60 seconds to every push, including pushes it decides to skip. Start slow work elsewhere first, and answer with an error if it can't start: an answered message is never sent again. Any other answer is a failure, and Pub/Sub sends the message again;
+- expect repeats and out-of-order delivery: skip a `run_id` already handled, and when keeping the highest `run_id`, keep one per `job_id` and compare as numbers, since all jobs share one run id sequence;
 - hold no secret in its URL, which shows in Terraform plans and Datadog alerts.
 
 Changing a consumer's `dbt_job_ids` recreates its subscription and loses any messages still waiting. Each consumer has two Datadog monitors that alert `@dps-dse@cru.org`: one when a message has waited more than an hour, and one when no push has succeeded within `alert_after_hours`. To re-drive a consumer, re-run its dbt job. A hand-made test message with a made-up `run_id` can make a consumer skip every real build after it. There is no ready-made path for a consumer that cannot verify a token: `webhook-notify-workflow` only runs on hightouch-workflow's completion message.
@@ -436,7 +436,7 @@ A persistent fail-open alerts through the Datadog monitor "DSE dbt trigger gate 
 | Terraform (POC) | `dot/poc-terraform/` |
 | Workflow definitions | `cru-terraform/.../dot/prod/*.yaml` + `workflow.tf` |
 | Eventarc triggers | `cru-terraform/.../dot/prod/event-triggers.tf` |
-| Push subscriptions | `cru-terraform/.../dot/prod/dbt-job-completed-push.tf` |
+| Push subscriptions | `cru-terraform/.../dot/prod/dbt-job-completed-push.tf` (the push list). Other teams' own subscriptions live in their apps' roots. List every subscription on the topic: `gcloud pubsub topics list-subscriptions dbt-job-completed --project=cru-data-orchestration-prod` |
 | Permissions | `cru-terraform/.../dot/prod/permissions.tf` |
 | Secrets | `cru-terraform/.../dot/prod/secrets.tf` |
 
@@ -517,6 +517,8 @@ Sometimes you need to trigger a downstream workflow without running the full ups
 ### Trigger via dbt-webhook (simulates a dbt Cloud completion)
 
 This sends a POST to the dbt-webhook Cloud Function as if dbt Cloud sent it. The function validates the signing key, publishes to the appropriate Pub/Sub topics, and all downstream workflows fire normally.
+
+The message also reaches other teams' subscriptions filtered on that job ([Subscribe to dbt job success](SUBSCRIBE_TO_DBT_JOB_SUCCESS.md)). Keep `runId` at `"0"`: that guide tells those teams a `"0"` is a hand-made test to skip. To make their apps act, for example after an outage, re-run the dbt job instead.
 
 **Prerequisites:**
 - The `DBT_WEBHOOK_SECRET` from 1Password or Secret Manager
