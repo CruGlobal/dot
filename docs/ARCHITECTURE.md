@@ -521,7 +521,7 @@ This sends a POST to the dbt-webhook Cloud Function as if dbt Cloud sent it. The
 
 The message also reaches other teams' subscriptions and push-list entries filtered on that job ([Subscribe to dbt job success](SUBSCRIBE_TO_DBT_JOB_SUCCESS.md)). Keep `runId` at `"0"`: the guide tells those teams to skip a `"0"` as a hand-made test. To make their apps act, for example after an outage, re-run the dbt job instead.
 
-To send a team the test message the guide offers, first confirm with the team that its endpoint skips a `"0"`, and check that its job id is not in the Fabric mapping (`dbt-webhook/webhook_utils.py`) or in `dbt_job_to_hightouch` (cru-terraform `dot/prod/workflow.tf`): those start real work for any `runId`. Then fill in the job in this template. Left unfilled, it matches no subscription.
+To send a team the test message the guide offers, first confirm with the team that its endpoint skips a `"0"`, and check that its job id is not in the Fabric mapping (`dbt-webhook/webhook_utils.py`) or in `dbt_job_to_hightouch` (cru-terraform `dot/prod/workflow.tf`): those start real work for any `runId`. Then fill in the job in this template. Left unfilled, it matches no team's job filter and starts no work.
 
 **Test message for a subscribing team:**
 ```bash
