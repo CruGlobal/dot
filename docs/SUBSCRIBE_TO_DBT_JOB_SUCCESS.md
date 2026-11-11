@@ -99,15 +99,16 @@ cru-terraform, `applications/workvivo-sync/prod/`, has a working copy of each.
 - **A push service account, and an endpoint the public can't call.** `cloudrun.tf` makes the
   account (`invoker_service_accounts`) and gives it `roles/run.invoker` on a service whose type
   isn't `app` (`invokers`). In workvivo-sync that is its only service, of type `trigger`. Both
-  inputs need the Cloud Run module's `v2-pipeline` ref, which workvivo-sync uses. Don't push to an
-  `app` service: unless `load_balancer_strategy` is `"none"`, the module lets anyone call it, so
-  nothing would check the token. If your endpoint is public or not on Cloud Run, check the token
+  inputs need the Cloud Run module's `v2-pipeline` ref, which workvivo-sync uses. Don't push to a
+  service whose `type` is `app`: unless `load_balancer_strategy` is `"none"`, the module lets
+  anyone call it, so nothing would check the token. If your endpoint is public or not on Cloud Run, check the token
   in your code: its signature, its `email` (your push service account) and its `aud` (your
   audience).
 - **Pub/Sub's own service account, allowed to sign tokens as your push service account.**
-  `failure-route.tf` makes sure it exists (`google_project_service_identity`, which needs
-  `google-beta` in `required_providers`, as workvivo-sync's `terraform.tf` has), then gives it
-  `roles/iam.serviceAccountTokenCreator` on the push service account.
+  `failure-route.tf` makes sure it exists (`google_project_service_identity`, a google-beta
+  resource: it needs `provider = google-beta` and `google-beta` in `required_providers`, as
+  workvivo-sync has), then gives it `roles/iam.serviceAccountTokenCreator` on the push service
+  account.
 - **Alerts.** `datadog.tf` has the first of the two alerts in section 6.
 
 ## 4. What you receive
@@ -145,11 +146,12 @@ Its data is this JSON:
 ## 5. Rules for your endpoint
 
 - **Start the work, then answer.** Start slow work somewhere else, such as a Cloud Run job, without
-  waiting for it to finish. Give the start a time limit well under the ack deadline (60 seconds
-  above); workvivo-sync uses 45. Once it has started, answer with a success code: 102, 200, 201,
-  202 or 204. If it fails or runs out of time, answer with an error so Pub/Sub sends the message
-  again. Pub/Sub doesn't resend a message you answered with a success code, so a build is lost if
-  you answer first and the start then fails. Answer messages you skip with a success code too.
+  waiting for it to finish. Give the whole answer, your checks and the start together, a time
+  limit well under the ack deadline (60 seconds above); workvivo-sync uses 45. Once the work has
+  started, answer with a success code: 102, 200, 201, 202 or 204. If it fails or runs out of time,
+  answer with an error so Pub/Sub sends the message again. Once you answer with a success code,
+  Pub/Sub treats the message as done, so a build is lost if you answer first and the start then
+  fails. Answer messages you skip with a success code too.
 - **Expect repeats and out-of-order delivery.** A repeat carries the same `run_id`. Skip a `run_id`
   you already started work for. If you keep the highest `run_id` you've handled, keep one per
   `job_id` and compare them as numbers, not text. If your job is still running from an older build
@@ -189,9 +191,8 @@ status.
 ## 7. Check that it works
 
 After your job's next successful run, graph `gcp.pubsub.subscription.push_request_count` for your
-subscription, split by `response_class`, and look for an `ack`. Until that first `ack`, the
-no-message alert can't fire, so this check is the only one. If nothing arrives within the job's
-normal gap, check the job id in your filter. If pushes arrive but not as `ack`, split by
+subscription, split by `response_class`, and look for an `ack`. If nothing arrives within the
+job's normal gap, check the job id in your filter. If pushes arrive but not as `ack`, split by
 `response_code`: a 401 or 403 points at the token setup in section 3.
 
 To test before the next real build, ask datahelp@cru.org for a test message. Its `run_id` is
