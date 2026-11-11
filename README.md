@@ -3,6 +3,9 @@
 This repo contains a collection of GCP Cloud Run functions to 'glue' together
 various pieces of our ELT stack.
 
+Need your app to start when a dbt job succeeds? See
+[Subscribe to dbt job success](docs/SUBSCRIBE_TO_DBT_JOB_SUCCESS.md).
+
 ## Organization
 Each function has its own folder.
 The folder name exactly matches the 'name' component of several kinds of GCP resources,
