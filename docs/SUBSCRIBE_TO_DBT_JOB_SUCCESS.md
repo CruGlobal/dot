@@ -100,10 +100,10 @@ cru-terraform, `applications/workvivo-sync/prod/`, has a working copy of each.
   account (`invoker_service_accounts`) and gives it `roles/run.invoker` on a service whose type
   isn't `app` (`invokers`). In workvivo-sync that is its only service, of type `trigger`. Both
   inputs need the Cloud Run module's `v2-pipeline` ref, which workvivo-sync uses. Don't push to a
-  service whose `type` is `app`, the default when `type` is left out: unless `load_balancer_strategy` is `"none"`, the module lets
-  anyone call it, so nothing would check the token. If your endpoint is public or not on Cloud Run, check the token
-  in your code: its signature, its `email` (your push service account) and its `aud` (your
-  audience).
+  service whose `type` is `app`, the default when `type` is left out: unless
+  `load_balancer_strategy` is `"none"`, the module lets anyone call it, so nothing would check the
+  token. If your endpoint is public or not on Cloud Run, check the token in your code: its
+  signature, its `email` (your push service account) and its `aud` (your audience).
 - **Pub/Sub's own service account, allowed to sign tokens as your push service account.**
   `failure-route.tf` makes sure it exists (`google_project_service_identity`, a google-beta
   resource: it needs `provider = google-beta` and `google-beta` in `required_providers`, as
