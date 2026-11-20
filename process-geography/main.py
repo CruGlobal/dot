@@ -303,7 +303,7 @@ def load_to_dataframe(
             file_bytes = io.BytesIO(r.content)
 
             # Process the file based on type
-            if url.endswith(".zip") or "suffix=zip" in url:
+            if url.endswith(".zip"):
                 with zipfile.ZipFile(file_bytes, "r") as zip_ref:
                     df_original = process_zip_file(
                         zip_ref,
