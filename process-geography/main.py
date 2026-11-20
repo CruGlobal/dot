@@ -107,11 +107,6 @@ def get_authentication(url: str) -> Tuple[Dict[str, str], Any]:
         geonames_username = os.environ.get("GEONAMES_USERNAME", None).strip()
         geonames_password = os.environ.get("GEONAMES_PASSWORD", None).strip()
         auth = (geonames_username, geonames_password)
-        return url, auth
-    elif "maxmind" in url_domain:
-        maxmind_license_key = os.environ.get("MAXMIND_LICENSE_KEY", None).strip()
-        url = url + f"&license_key={maxmind_license_key}"
-        return url, None
 
     return url, auth
 

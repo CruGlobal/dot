@@ -30,7 +30,6 @@ def sample_schema():
 def mock_env_vars(monkeypatch):
     monkeypatch.setenv("GEONAMES_USERNAME", "test_user")
     monkeypatch.setenv("GEONAMES_PASSWORD", "test_pass")
-    monkeypatch.setenv("MAXMIND_LICENSE_KEY", "test_key")
 
 
 @pytest.fixture(autouse=True)
@@ -67,10 +66,10 @@ def test_get_authentication_geonames(mock_env_vars):
     assert auth == ("test_user", "test_pass")
 
 
-def test_get_authentication_maxmind(mock_env_vars):
-    url = "https://download.maxmind.com/test"
+def test_get_authentication_other_host(mock_env_vars):
+    url = "https://example.com/test"
     result_url, auth = get_authentication(url)
-    assert "license_key=test_key" in result_url
+    assert result_url == url
     assert auth is None
 
 
