@@ -33,11 +33,6 @@ spec:
                 secretKeyRef:
                   key: latest
                   name: process-geography_GEONAMES_USERNAME
-            - name: MAXMIND_LICENSE_KEY
-              valueFrom:
-                secretKeyRef:
-                  key: latest
-                  name: process-geography_MAXMIND_LICENSE_KEY
             resources:
               limits:
                 memory: 16Gi
